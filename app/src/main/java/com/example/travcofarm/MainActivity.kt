@@ -610,8 +610,11 @@ class MainActivity : AppCompatActivity() {
     private fun addFarmTargetsSequentially(list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int) {
         if(index>=coords.size) { log("FARMLIST END completed=${coords.size}"); return }
         val (x,y)=coords[index]
+        val token = "travcoFarmResult_${System.currentTimeMillis()}_${index}"
         val js="""
-          (async function(){
+          (function(){
+            const KEY=${JSONObject.quote(token)};
+            window[KEY]=null;
             const sleep=ms=>new Promise(r=>setTimeout(r,ms));
             const clean=v=>(v||'').replace(/\\s+/g,' ').trim();
             const norm=v=>clean(v).replace(/\\(\\d+\\s+farms?\\)/ig,'').replace(/\\bdelete\\b/ig,'').trim().toLowerCase();
@@ -619,96 +622,143 @@ class MainActivity : AppCompatActivity() {
             const troop=${JSONObject.quote(unit)};
             const amount=${count};
             const result={x:${x},y:${y},url:location.href,steps:[]};
-            try{
-              if(!location.href.includes('gid=16')) result.steps.push('wrong_page');
-              let wrappers=[...document.querySelectorAll('#rallyPointFarmList .farmListWrapper')];
-              if(!wrappers.length) wrappers=[...document.querySelectorAll('.farmListWrapper')];
-              const wrapper=wrappers.find(w=>{
-                const n=w.querySelector('.farmListName .name')?.textContent ||
-                        w.querySelector('.farmListName')?.textContent ||
-                        w.getAttribute('data-list-name') || '';
-                return norm(n)===norm(targetName);
-              });
-              if(!wrapper){
-                result.error='Farm List not found: '+targetName;
-                result.available=wrappers.map(w=>clean(w.innerText).slice(0,100));
-                return JSON.stringify(result);
-              }
-              result.listText=clean(wrapper.innerText).slice(0,150);
-              const add=wrapper.querySelector('td.addTarget a,td.addTarget button,.addTarget a,.addTarget button,[data-action*="add" i]');
-              if(!add){
-                const candidates=[...wrapper.querySelectorAll('a,button')];
-                const byText=candidates.find(e=>/add\\s*(target|farm)|target\\s*add|add/i.test(clean(e.innerText||e.getAttribute('title')||e.getAttribute('aria-label'))));
-                if(byText) { byText.click(); result.steps.push('open_add_target_text'); }
-                else { result.error='Add Target button not found'; return JSON.stringify(result); }
-              } else { add.click(); result.steps.push('open_add_target'); }
+            (async function(){
+              try{
+                if(!location.href.includes('gid=16')) result.steps.push('wrong_page');
 
-              let form=null;
-              for(let i=0;i<60;i++){
-                form=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm');
-                if(form) break;
-                await sleep(200);
-              }
-              if(!form){
-                result.error='Farm target form did not render';
-                result.body=clean(document.body?.innerText).slice(-1200);
-                return JSON.stringify(result);
-              }
-              const inputs=[...form.querySelectorAll('input')];
-              const xi=form.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]')||
-                       inputs.find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
-              const yi=form.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]')||
-                       inputs.find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
-              if(!xi||!yi){result.error='X/Y input not found';return JSON.stringify(result);}
-              const set=(e,v)=>{
-                const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
-                if(setter) setter.call(e,String(v)); else e.value=String(v);
-                e.dispatchEvent(new Event('input',{bubbles:true}));
-                e.dispatchEvent(new Event('change',{bubbles:true}));
-                e.dispatchEvent(new Event('blur',{bubbles:true}));
-              };
-              set(xi,${x}); set(yi,${y}); result.steps.push('coordinates_filled');
-              await sleep(800);
-
-              let troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
-              if(!troopInput){
-                troopInput=[...form.querySelectorAll('input.unitAmount,input[type="text"],input[type="number"]')]
-                  .find(e=>(e.name||'').toLowerCase()===troop.toLowerCase());
-              }
-              if(troopInput){ set(troopInput,amount); result.steps.push('troop_filled'); }
-              else result.steps.push('troop_input_not_found');
-
-              let save=null;
-              for(let i=0;i<60;i++){
-                save=form.querySelector('button.save,button[type="submit"],input[type="submit"],.save');
-                if(save && !save.disabled) break;
-                await sleep(200);
-              }
-              if(!save || save.disabled){
-                result.error='Save button unavailable/disabled';
-                result.formText=clean(form.innerText).slice(0,1200);
-                return JSON.stringify(result);
-              }
-              save.click(); result.steps.push('save_clicked');
-              for(let i=0;i<60;i++){
-                if(!document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm')){
-                  result.ok=true; return JSON.stringify(result);
+                // Travian/RoG can render the farm-list panel in different containers.
+                let wrappers=[...document.querySelectorAll('#rallyPointFarmList .farmListWrapper')];
+                if(!wrappers.length) wrappers=[...document.querySelectorAll('.farmListWrapper')];
+                const wrapper=wrappers.find(w=>{
+                  const n=w.querySelector('.farmListName .name')?.textContent ||
+                          w.querySelector('.farmListName')?.textContent ||
+                          w.getAttribute('data-list-name') || '';
+                  return norm(n)===norm(targetName);
+                });
+                if(!wrapper){
+                  result.error='Farm List not found: '+targetName;
+                  result.available=wrappers.map(w=>clean(w.innerText).slice(0,150));
+                  window[KEY]=result; return;
                 }
-                await sleep(200);
+                result.listText=clean(wrapper.innerText).slice(0,250);
+
+                // First try the actual Add Target/Add Farm control used by Travian.
+                let add=wrapper.querySelector('td.addTarget a,td.addTarget button,.addTarget a,.addTarget button');
+                if(!add) add=wrapper.querySelector('[data-action*="add" i],[class*="addTarget" i] a,[class*="addTarget" i] button');
+                if(!add){
+                  const candidates=[...wrapper.querySelectorAll('a,button,input[type="button"],input[type="submit"]')];
+                  add=candidates.find(e=>{
+                    const txt=clean(e.innerText||e.value||e.getAttribute('title')||e.getAttribute('aria-label'));
+                    return /add\\s*(target|farm)|target\\s*add|farm\\s*list/i.test(txt);
+                  });
+                }
+                if(!add){ result.error='Add Target button not found'; window[KEY]=result; return; }
+                add.click(); result.steps.push('open_add_target');
+
+                let form=null;
+                for(let i=0;i<80;i++){
+                  form=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm');
+                  if(form) break;
+                  await sleep(150);
+                }
+                if(!form){
+                  // Fallback: any visible dialog/form containing coordinate inputs.
+                  form=[...document.querySelectorAll('form')].find(f=>{
+                    const xs=f.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]');
+                    const ys=f.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]');
+                    return xs&&ys;
+                  });
+                }
+                if(!form){
+                  result.error='Farm target form did not render';
+                  result.body=clean(document.body?.innerText).slice(-1800);
+                  window[KEY]=result; return;
+                }
+
+                const inputs=[...form.querySelectorAll('input')];
+                const xi=form.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]') ||
+                         inputs.find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
+                const yi=form.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]') ||
+                         inputs.find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
+                if(!xi||!yi){ result.error='X/Y input not found'; window[KEY]=result; return; }
+
+                const set=(e,v)=>{
+                  const proto=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+                  if(proto&&proto.set) proto.set.call(e,String(v)); else e.value=String(v);
+                  e.dispatchEvent(new Event('input',{bubbles:true}));
+                  e.dispatchEvent(new Event('change',{bubbles:true}));
+                  e.dispatchEvent(new Event('blur',{bubbles:true}));
+                };
+                set(xi,${x}); set(yi,${y}); result.steps.push('coordinates_filled');
+                await sleep(500);
+
+                let troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
+                if(!troopInput){
+                  troopInput=[...form.querySelectorAll('input.unitAmount,input[type="text"],input[type="number"]')]
+                    .find(e=>(e.name||'').toLowerCase()===troop.toLowerCase());
+                }
+                if(troopInput){ set(troopInput,amount); result.steps.push('troop_filled'); }
+                else result.steps.push('troop_input_not_found');
+
+                let save=null;
+                for(let i=0;i<80;i++){
+                  save=form.querySelector('button.save,button[type="submit"],input[type="submit"],.save');
+                  if(save && !save.disabled) break;
+                  await sleep(150);
+                }
+                if(!save || save.disabled){
+                  result.error='Save button unavailable/disabled';
+                  result.formText=clean(form.innerText).slice(0,1600);
+                  window[KEY]=result; return;
+                }
+                save.click(); result.steps.push('save_clicked');
+
+                // Wait for the modal/form to disappear OR the target to appear in the list.
+                for(let i=0;i<80;i++){
+                  const still=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm');
+                  const body=clean(wrapper.innerText);
+                  const coordSeen=body.includes('(${x}|${y})') || (body.includes('${x}') && body.includes('${y}'));
+                  if(!still || coordSeen){ result.ok=true; window[KEY]=result; return; }
+                  await sleep(150);
+                }
+                result.error='Save clicked but form remained open';
+                window[KEY]=result;
+              }catch(e){
+                result.error=String(e&&e.message||e);
+                window[KEY]=result;
               }
-              result.error='Save clicked but form remained open';
-              return JSON.stringify(result);
-            }catch(e){result.error=String(e&&e.message||e);return JSON.stringify(result);}
+            })();
+            return KEY;
           })();
         """.trimIndent()
-        webView.evaluateJavascript(js) { result ->
+
+        // evaluateJavascript() does NOT wait for a JavaScript Promise. The old code
+        // evaluated an async IIFE directly, so Android received the Promise/empty
+        // result and the log showed steps=[] even though the JS had not finished.
+        webView.evaluateJavascript(js) { keyResult ->
+            val key=unquoteJs(keyResult).ifBlank { token }
+            pollFarmListResult(key, list,unit,count,coords,index,0)
+        }
+    }
+
+    private fun pollFarmListResult(key:String,list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,attempt:Int) {
+        webView.evaluateJavascript("window[${JSONObject.quote(key)}] ? JSON.stringify(window[${JSONObject.quote(key)}]) : ''") { result ->
             val raw=unquoteJs(result)
+            if(raw.isBlank() && attempt < 100) {
+                handler.postDelayed({ pollFarmListResult(key,list,unit,count,coords,index,attempt+1) },150)
+                return@evaluateJavascript
+            }
+            val (x,y)=coords[index]
             try {
                 val o=JSONObject(raw)
                 log("FARMLIST TARGET ${index+1}/${coords.size} (${x}|${y}) RESULT: ok=${o.optBoolean("ok")} steps=${o.optJSONArray("steps")?.toString() ?: "[]"}")
-                if(o.has("error")) log("FARMLIST TARGET ERROR (${x}|${y}): ${o.optString("error").take(1000)}")
-            } catch(e:Exception) { log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1500)}") }
-            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1) },700)
+                if(o.has("error")) log("FARMLIST TARGET ERROR (${x}|${y}): ${o.optString("error").take(1400)}")
+                if(o.has("available")) log("FARMLIST AVAILABLE: ${o.optJSONArray("available")?.toString()?.take(1200)}")
+            } catch(e:Exception) {
+                log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
+            }
+            webView.evaluateJavascript("try{delete window[${JSONObject.quote(key)}];}catch(e){}",null)
+            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1) },900)
             else log("FARMLIST END processed=${coords.size}")
         }
     }
