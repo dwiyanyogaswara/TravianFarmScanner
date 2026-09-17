@@ -695,19 +695,34 @@ class MainActivity : AppCompatActivity() {
 
                 const set=(e,v)=>{
                   const proto=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
-                  if(proto&&proto.set) proto.set.call(e,String(v)); else e.value=String(v);
+                  const value=String(v);
+                  if(proto&&proto.set) proto.set.call(e,value); else e.value=value;
                   e.dispatchEvent(new Event('input',{bubbles:true}));
                   e.dispatchEvent(new Event('change',{bubbles:true}));
+                  e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'End'}));
                   e.dispatchEvent(new Event('blur',{bubbles:true}));
                 };
-                // Isi koordinat X dan Y sesuai DOM Travian.
+
+                // Isi X dan Y.
                 set(xi,${x});
                 set(yi,${y});
                 result.steps.push('X_filled=${x}');
                 result.steps.push('Y_filled=${y}');
+
+                // Isi pasukan SEBELUM validasi terakhir Save.
+                let troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
+                if(!troopInput){
+                  troopInput=[...form.querySelectorAll('input.unitAmount,input[type="text"],input[type="number"]')]
+                    .find(e=>(e.name||'').toLowerCase()===troop.toLowerCase());
+                }
+                if(troopInput){
+                  set(troopInput,amount);
+                  result.steps.push('troop_filled');
+                } else result.steps.push('troop_input_not_found');
+
                 await sleep(300);
 
-                // Klik area body/content popup untuk memicu update state/validasi Travian.
+                // Klik bagian body popup untuk memicu validasi/update state.
                 let popupBody =
                   form.querySelector('.content') ||
                   form.querySelector('.dialogContent') ||
@@ -715,6 +730,7 @@ class MainActivity : AppCompatActivity() {
                   form.querySelector('.targetSelectionValidation') ||
                   form;
                 try {
+                  popupBody.click();
                   popupBody.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,view:window}));
                   popupBody.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,view:window}));
                   popupBody.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));
@@ -723,17 +739,9 @@ class MainActivity : AppCompatActivity() {
                   result.steps.push('popup_body_click_error');
                 }
 
-                // Tunggu 2 detik agar validasi/state tombol Save selesai.
+                // Sesuai permintaan: tunggu 2 detik setelah klik body popup.
                 await sleep(2000);
                 result.steps.push('wait_after_body=2000ms');
-
-                let troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
-                if(!troopInput){
-                  troopInput=[...form.querySelectorAll('input.unitAmount,input[type="text"],input[type="number"]')]
-                    .find(e=>(e.name||'').toLowerCase()===troop.toLowerCase());
-                }
-                if(troopInput){ set(troopInput,amount); result.steps.push('troop_filled'); }
-                else result.steps.push('troop_input_not_found');
 
                 let save=null;
                 for(let i=0;i<20;i++){
