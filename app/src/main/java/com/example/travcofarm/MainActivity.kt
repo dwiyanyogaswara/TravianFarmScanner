@@ -676,11 +676,22 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 const inputs=[...form.querySelectorAll('input')];
-                const xi=form.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]') ||
-                         inputs.find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
-                const yi=form.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]') ||
-                         inputs.find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
-                if(!xi||!yi){ result.error='X/Y input not found'; window[KEY]=result; return; }
+                //const xi=form.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]') ||
+                         //inputs.find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
+                //const yi=form.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]') ||
+                       //  inputs.find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
+               // if(!xi||!yi){ result.error='X/Y input not found'; window[KEY]=result; return; }
+
+
+
+// PERBAIKAN UTAMA: Selector spesifik untuk DOM dengan wrapper .coordinateX / .coordinateY
+            const xi=form.querySelector('.coordinateX input, input[name="x"]') ||
+                     [...form.querySelectorAll('input')].find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
+            const yi=form.querySelector('.coordinateY input, input[name="y"]') ||
+                     [...form.querySelectorAll('input')].find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
+            if(!xi||!yi){ result.error='X/Y input not found'; window[KEY]=result; return; }
+
+            
 
                 const set=(e,v)=>{
                   const proto=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
