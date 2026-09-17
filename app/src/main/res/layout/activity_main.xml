@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent">
+    <LinearLayout
+        android:orientation="vertical" android:padding="12dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+
+        <TextView android:text="TRAVCO + OASIS FARMLIST" android:textStyle="bold"
+            android:textSize="20sp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/tvStatus" android:text="Status: belum login"
+            android:layout_marginTop="6dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+        <EditText android:id="@+id/etServer" android:hint="Server Travian, contoh ts20.x2.europe.travian.com"
+            android:inputType="textUri" android:singleLine="true"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/etX" android:hint="X pusat scan" android:inputType="numberSigned"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/etY" android:hint="Y pusat scan" android:inputType="numberSigned"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/etRadius" android:hint="Radius Oasis (contoh 30)" android:inputType="number"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+        <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <Button android:id="@+id/btnLogin" android:text="LOGIN TRAVIAN" android:layout_weight="1"
+                android:layout_width="0dp" android:layout_height="wrap_content"/>
+            <Button android:id="@+id/btnLogout" android:text="LOGOUT" android:layout_weight="1"
+                android:layout_width="0dp" android:layout_height="wrap_content"/>
+        </LinearLayout>
+
+        <Button android:id="@+id/btnScanTravco" android:text="SCAN TRAVCO VILLAGE"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/tvTravcoCount" android:text="Travco DB: 0"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+        <Button android:id="@+id/btnScanOasis" android:text="SCAN OASIS MAP"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/tvOasisCount" android:text="Oasis DB: 0"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+        <TextView android:text="FARMLIST" android:textStyle="bold" android:textSize="18sp"
+            android:layout_marginTop="12dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/etFarmList" android:hint="Nama farmlist yang sudah ada"
+            android:singleLine="true" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/etTroop" android:hint="Unit, contoh t1" android:singleLine="true"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/etTroopCount" android:hint="Jumlah unit, contoh 20" android:inputType="number"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <Button android:id="@+id/btnFarmTravco" android:text="MASUKKAN FARMLIST DARI TRAVCO"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <Button android:id="@+id/btnFarmOasis" android:text="MASUKKAN FARMLIST DARI OASIS"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+        <TextView android:id="@+id/tvLog" android:text="Log..."
+            android:fontFamily="monospace" android:layout_marginTop="8dp"
+            android:layout_width="match_parent" android:layout_height="220dp"/>
+        <WebView android:id="@+id/webView" android:visibility="gone"
+            android:layout_width="match_parent" android:layout_height="500dp"/>
+    </LinearLayout>
+</ScrollView>
