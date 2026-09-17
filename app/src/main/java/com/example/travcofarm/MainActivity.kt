@@ -103,7 +103,6 @@ class MainActivity : AppCompatActivity() {
         content.addView(button("REFRESH FARMLIST AKUN") { loadFarmLists() })
         content.addView(button("MASUKKAN FARMLIST DARI TRAVCO") { addTravcoToFarmList() })
         content.addView(button("MASUKKAN FARMLIST DARI OASIS") { addOasisToFarmList() })
-        content.addView(logView)
 
         content.addView(label("WEBVIEW — DESKTOP MODE", 18f))
         webView = WebView(this).apply {
@@ -134,7 +133,6 @@ class MainActivity : AppCompatActivity() {
             setTextIsSelectable(true)
             isVerticalScrollBarEnabled = true
         }
-        content.addView(logView)
 
         setContentView(root)
         log("APP START")
