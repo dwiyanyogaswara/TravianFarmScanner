@@ -469,7 +469,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun parseAnimals(text:String):String=Regex("unit\\s+u(\\d+)\\\"\\s*>\\s*</i>\\s*<span\\s+class=\\\"value\\s*\\\">\\s*(\\d+)",RegexOption.IGNORE_CASE).findAll(text).joinToString(", "){animalName(it.groupValues[1].toInt())+" "+it.groupValues[2]}
     private fun animalName(id:Int)=when(id){31->"Rat";32->"Spider";33->"Snake";34->"Bat";35->"Wild Boar";36->"Wolf";37->"Bear";38->"Crocodile";39->"Tiger";40->"Elephant";else->"u$id"}
-    private fun extract(text:String,pattern:String)=Regex(pattern,RegexOption.IGNORE_CASE or RegexOption.DOT_MATCHES_ALL).find(text)?.groupValues?.getOrNull(1)?.replace(Regex("<[^>]+>"),"")?.trim().orEmpty()
+    private fun extract(text:String,pattern:String)=Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(text)?.groupValues?.getOrNull(1)?.replace(Regex("<[^>]+>"),"")?.trim().orEmpty()
     private fun stripFormat(s:String)=s.filter{it.code !in 0x200B..0x206F}
     private fun readCoord(t:JSONObject,n:String):Int?=if(t.has(n)) t.optString(n).toIntOrNull() ?: t.optInt(n).takeIf{t.opt(n) is Number} else t.optJSONObject("position")?.optString(n)?.toIntOrNull() ?: t.optJSONObject("coordinates")?.optString(n)?.toIntOrNull()
 
@@ -497,8 +497,8 @@ class MainActivity : AppCompatActivity() {
         fun insertOasis(x:Int,y:Int,o:Boolean,t:String,f:String,a:String,owner:String,alliance:String){writableDatabase.execSQL("INSERT OR REPLACE INTO oasis(x,y,occupied,oasisType,filterType,animals,owner,alliance) VALUES(?,?,?,?,?,?,?,?)",arrayOf(x,y,if(o)1 else 0,t,f,a,owner,alliance))}
         fun travcoCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM travco",null).use{it.moveToFirst();it.getInt(0)}
         fun oasisCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis",null).use{it.moveToFirst();it.getInt(0)}
-        fun travcoCoords():List<Pair<Int,Int>>=coords("SELECT x,y FROM travco ORDER BY distance ASC")
-        fun oasisCoords():List<Pair<Int,Int>>=coords("SELECT x,y FROM oasis WHERE occupied=0 ORDER BY id")
+        fun travcoCoords(): List<Pair<Int, Int>> = coords("SELECT x,y FROM travco ORDER BY distance ASC")
+        fun oasisCoords(): List<Pair<Int, Int>> = coords("SELECT x,y FROM oasis WHERE occupied=0 ORDER BY id")
         private fun coords(sql:String):List<Pair<Int,Int>>{val r=ArrayList<Pair<Int,Int>>();readableDatabase.rawQuery(sql,null).use{while(it.moveToNext())r.add(it.getInt(0) to it.getInt(1))};return r}
     }
 }
