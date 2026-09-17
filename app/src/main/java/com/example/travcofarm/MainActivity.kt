@@ -343,7 +343,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startOasisRequests(cx: Int, cy: Int, radius: Int) {
-        val step = 30
+        // /api/v1/map/position returns the useful tile metadata for oasis
+        // detection at zoomLevel=2. Keep a small overlap between requests
+        // so no tile is missed when scanning the requested radius.
+        val step = 20
         val startX = cx - radius
         val endX = cx + radius
         val startY = cy - radius
@@ -361,7 +364,7 @@ class MainActivity : AppCompatActivity() {
             val js = """
               (async function(){
                 const u=location.origin+'/api/v1/map/position';
-                const payload={data:{x:$x,y:$y,zoomLevel:3,ignorePositions:[]}};
+                const payload={data:{x:$x,y:$y,zoomLevel:2,ignorePositions:[]}};
                 const out={requestNo:$requestNo,x:$x,y:$y,url:u,payload:payload};
                 try{
                   const r=await fetch(u,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','accept':'application/json, text/plain, */*'},body:JSON.stringify(payload)});
