@@ -103,7 +103,6 @@ class MainActivity : AppCompatActivity() {
         content.addView(button("REFRESH FARMLIST AKUN") { loadFarmLists() })
         content.addView(button("MASUKKAN FARMLIST DARI TRAVCO") { addTravcoToFarmList() })
         content.addView(button("MASUKKAN FARMLIST DARI OASIS") { addOasisToFarmList() })
-
         content.addView(label("WEBVIEW — DESKTOP MODE", 18f))
         webView = WebView(this).apply {
             layoutParams = LinearLayout.LayoutParams(-1, dp(520))
@@ -133,6 +132,7 @@ class MainActivity : AppCompatActivity() {
             setTextIsSelectable(true)
             isVerticalScrollBarEnabled = true
         }
+        content.addView(logView)
 
         setContentView(root)
         log("APP START")
@@ -428,22 +428,24 @@ class MainActivity : AppCompatActivity() {
                 val did = readIntFlexible(t, "did")
                 val title = t.optString("title")
                 val text = stripFormat(t.optString("text"))
-                if (did == -1) didMinusOne++
-                if (title == "{k.fo}" || title == "{k.bt}") titleOasis++
+                if (did == -1 || did == null) didMinusOne++
+                val looksLikeOasis = title == "{k.fo}" || title == "{k.bt}" ||
+                    bonusRegex().containsMatchIn(text) ||
+                    Regex("\\b(25|50)\\s*%").containsMatchIn(text)
+                if (looksLikeOasis) titleOasis++
                 if (bonusRegex().containsMatchIn(text)) bonusCandidate++
                 val x = readCoord(t, "x")
                 val y = readCoord(t, "y")
                 if (x != null && y != null) coordCandidate++
-                if (!sampleLogged && (title == "{k.fo}" || title == "{k.bt}" || i == 0)) {
+                if (!sampleLogged && (looksLikeOasis || i == 0)) {
                     log("OASIS TILE SAMPLE center=($requestX|$requestY) index=$i did=$did title='$title' x=$x y=$y text='${text.take(500)}'")
                     sampleLogged = true
                 }
-                if (did != -1) continue
-                if (title != "{k.fo}" && title != "{k.bt}") continue
+                if (did != -1 && did != null) continue
                 val type = mapOasisType(text)
                 if (type == null) continue
                 if (x == null || y == null) continue
-                val occupied = title == "{k.bt}" || (t.has("uid") && t.opt("uid") is Number)
+                val occupied = title == "{k.bt}" || (t.has("uid") && t.opt("uid") is Number) || t.optBoolean("occupied", false)
                 val animals = if (occupied) "" else parseAnimals(text)
                 val owner = if (occupied) extract(text, "\\{k\\.spieler\\}\\s*(.*?)\\s*(?:<br\\s*/?>|\\{k\\.|$)") else ""
                 val alliance = if (occupied) extract(text, "\\{k\\.allianz\\}\\s*(.*?)\\s*(?:<br\\s*/?>|\\{k\\.|$)") else ""
