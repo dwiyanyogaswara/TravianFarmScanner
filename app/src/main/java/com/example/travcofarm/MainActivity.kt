@@ -23,6 +23,8 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Spinner
+import android.widget.ArrayAdapter
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
 import org.json.JSONObject
@@ -37,6 +39,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var yInput: EditText
     private lateinit var radiusInput: EditText
     private lateinit var farmListInput: EditText
+    private lateinit var farmListSpinner: Spinner
+    private val farmListNames = mutableListOf<String>()
     private lateinit var unitInput: EditText
     private lateinit var countInput: EditText
     private lateinit var logView: TextView
@@ -72,8 +76,11 @@ class MainActivity : AppCompatActivity() {
         yInput = edit("Y", "-83")
         radiusInput = edit("Radius", "50")
         farmListInput = edit("Nama farmlist yang sudah ada", "")
-        unitInput = edit("Unit, contoh t1", "t1")
-        countInput = edit("Jumlah unit, contoh 20", "20")
+        farmListSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, farmListNames)
+        }
+        unitInput = edit("Unit (default t1)", "t1")
+        countInput = edit("Jumlah unit (default 20)", "20")
 
         content.addView(serverInput)
         content.addView(xInput)
@@ -98,7 +105,11 @@ class MainActivity : AppCompatActivity() {
         dbRow.addView(button("COPY LOG") { copyLog() }, lp(1f))
         content.addView(dbRow)
 
-        content.addView(label("FARMLIST", 20f))
+        content.addView(label("FARMLIST AKUN", 20f))
+        content.addView(farmListSpinner)
+        content.addView(button("REFRESH FARMLIST DARI AKUN") { loadFarmLists() })
+        // Hidden/unused text field is kept only for compatibility with older code.
+        farmListInput.visibility = android.view.View.GONE
         content.addView(farmListInput)
         content.addView(unitInput)
         content.addView(countInput)
@@ -169,6 +180,9 @@ class MainActivity : AppCompatActivity() {
                 log("WEBVIEW PAGE READY: $url")
                 if (url.contains("travian.com")) {
                     handler.postDelayed({ autoFillLoginIfNeeded() }, 900)
+                    if (url.contains("karte.php") || url.contains("dorf") || url.contains("build.php")) {
+                        handler.postDelayed({ loadFarmLists(false) }, 1200)
+                    }
                 }
             }
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -508,20 +522,89 @@ class MainActivity : AppCompatActivity() {
         log("DB OVERVIEW: travco=${db.travcoCount()} oasis=${db.oasisCount()} freeOasis=${db.oasisUnoccupiedCount()} occupiedOasis=${db.oasisOccupiedCount()}")
     }
 
+    private fun selectedFarmListName(): String {
+        val selected = farmListSpinner.selectedItem?.toString()?.trim().orEmpty()
+        return if (selected.isNotBlank()) selected else farmListInput.text.toString().trim()
+    }
+
+    private fun loadFarmLists(navigate: Boolean = true) {
+        val server = normalizeServer(serverInput.text.toString())
+        if (server.isBlank()) {
+            log("FARMLIST LOAD ERROR: server kosong")
+            return
+        }
+        log("FARMLIST LOAD START")
+        val run = {
+            val js = """
+              (function(){
+                const clean=v=>(v||'').replace(/\s+/g,' ').trim();
+                const out=[];
+                const seen=new Set();
+                const add=(name)=>{
+                  name=clean(name).replace(/\(\d+\s+farms?\)/ig,'').trim();
+                  if(name && !seen.has(name.toLowerCase())){seen.add(name.toLowerCase());out.push(name);}
+                };
+                document.querySelectorAll('#rallyPointFarmList .farmListWrapper').forEach(w=>{
+                  add(w.querySelector('.farmListName .name')?.textContent ||
+                      w.querySelector('.farmListName')?.textContent ||
+                      w.querySelector('[data-list]')?.getAttribute('data-list-name'));
+                });
+                if(!out.length){
+                  document.querySelectorAll('.farmListWrapper').forEach(w=>{
+                    add(w.querySelector('.farmListName .name')?.textContent ||
+                        w.querySelector('.farmListName')?.textContent ||
+                        w.getAttribute('data-list-name'));
+                  });
+                }
+                return JSON.stringify({ok:true,url:location.href,count:out.length,names:out});
+              })();
+            """.trimIndent()
+            webView.evaluateJavascript(js) { result ->
+                val raw=unquoteJs(result)
+                try {
+                    val o=JSONObject(raw)
+                    val arr=o.optJSONArray("names") ?: JSONArray()
+                    farmListNames.clear()
+                    for(i in 0 until arr.length()) farmListNames.add(arr.optString(i))
+                    val adapter = farmListSpinner.adapter as? ArrayAdapter<String>
+                    adapter?.notifyDataSetChanged()
+                    if(farmListNames.isNotEmpty()) {
+                        farmListSpinner.setSelection(0)
+                        farmListInput.setText(farmListNames[0])
+                        log("FARMLIST LOAD END: ${farmListNames.size} list ditemukan: ${farmListNames.joinToString(" | ")}")
+                    } else {
+                        log("FARMLIST LOAD END: 0 list. URL=${o.optString("url")}")
+                    }
+                } catch(e:Exception) {
+                    log("FARMLIST LOAD PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
+                }
+            }
+        }
+        if (navigate && !currentPage.contains("build.php?gid=16", ignoreCase=true) && !currentPage.contains("build.php?gid=16&", ignoreCase=true)) {
+            pageReady=false
+            webView.loadUrl("$server/build.php?gid=16&tt=99")
+            handler.postDelayed(run, 3500)
+        } else {
+            run()
+        }
+    }
+
     private fun addTravcoToFarmList() { addFromDb(false) }
     private fun addOasisToFarmList() { addFromDb(true) }
 
     private fun addFromDb(oasis:Boolean) {
-        val list=farmListInput.text.toString().trim(); val unit=unitInput.text.toString().trim(); val count=countInput.text.toString().toIntOrNull() ?: 0
-        if(list.isBlank() || unit.isBlank() || count<=0) { log("FARMLIST ERROR: list/unit/count invalid"); return }
+        val list=selectedFarmListName()
+        val unit=unitInput.text.toString().trim().ifBlank { "t1" }
+        val count=countInput.text.toString().toIntOrNull()?.takeIf { it > 0 } ?: 20
+        if(list.isBlank()) { log("FARMLIST ERROR: belum ada farmlist dari akun"); loadFarmLists(); return }
         val rows=if(oasis) db.oasisCoords() else db.travcoCoords()
         log("FARMLIST START source=${if(oasis) "OASIS" else "TRAVCO"} list='$list' targets=${rows.size} unit=$unit count=$count")
         if(rows.isEmpty()) { log("FARMLIST ERROR: database source empty"); return }
         val server=normalizeServer(serverInput.text.toString())
-        webView.loadUrl("$server/build.php?id=39&gid=16&tt=99")
+        webView.loadUrl("$server/build.php?gid=16&tt=99")
         handler.postDelayed({
             addFarmTargetsSequentially(list,unit,count,rows,0)
-        },3000)
+        },4500)
     }
 
     private fun addFarmTargetsSequentially(list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int) {
@@ -531,46 +614,88 @@ class MainActivity : AppCompatActivity() {
           (async function(){
             const sleep=ms=>new Promise(r=>setTimeout(r,ms));
             const clean=v=>(v||'').replace(/\\s+/g,' ').trim();
-            const norm=v=>clean(v).replace(/\\(\\d+\\s*farms?\\)/ig,'').replace(/\\bdelete\\b/ig,'').trim().toLowerCase();
+            const norm=v=>clean(v).replace(/\\(\\d+\\s+farms?\\)/ig,'').replace(/\\bdelete\\b/ig,'').trim().toLowerCase();
             const targetName=${JSONObject.quote(list)};
             const troop=${JSONObject.quote(unit)};
             const amount=${count};
             const result={x:${x},y:${y},url:location.href,steps:[]};
             try{
-              if(!location.href.includes('gid=16')) result.steps.push('page_not_farm_list');
-              const wrappers=[...document.querySelectorAll('#rallyPointFarmList .farmListWrapper')];
-              const wrapper=wrappers.find(w=>norm(w.querySelector('.farmListName .name')?.textContent)===norm(targetName));
-              if(!wrapper){result.error='Farm List not found';return JSON.stringify(result);}
-              const lid=wrapper.querySelector('.dragAndDrop[data-list]')?.getAttribute('data-list')||'';
-              result.lid=lid;
-              const add=wrapper.querySelector('td.addTarget a, td.addTarget button');
-              if(!add){result.error='Add Target button not found';return JSON.stringify(result);}
-              add.click(); result.steps.push('open_add_target');
+              if(!location.href.includes('gid=16')) result.steps.push('wrong_page');
+              let wrappers=[...document.querySelectorAll('#rallyPointFarmList .farmListWrapper')];
+              if(!wrappers.length) wrappers=[...document.querySelectorAll('.farmListWrapper')];
+              const wrapper=wrappers.find(w=>{
+                const n=w.querySelector('.farmListName .name')?.textContent ||
+                        w.querySelector('.farmListName')?.textContent ||
+                        w.getAttribute('data-list-name') || '';
+                return norm(n)===norm(targetName);
+              });
+              if(!wrapper){
+                result.error='Farm List not found: '+targetName;
+                result.available=wrappers.map(w=>clean(w.innerText).slice(0,100));
+                return JSON.stringify(result);
+              }
+              result.listText=clean(wrapper.innerText).slice(0,150);
+              const add=wrapper.querySelector('td.addTarget a,td.addTarget button,.addTarget a,.addTarget button,[data-action*="add" i]');
+              if(!add){
+                const candidates=[...wrapper.querySelectorAll('a,button')];
+                const byText=candidates.find(e=>/add\\s*(target|farm)|target\\s*add|add/i.test(clean(e.innerText||e.getAttribute('title')||e.getAttribute('aria-label'))));
+                if(byText) { byText.click(); result.steps.push('open_add_target_text'); }
+                else { result.error='Add Target button not found'; return JSON.stringify(result); }
+              } else { add.click(); result.steps.push('open_add_target'); }
+
               let form=null;
-              for(let i=0;i<40;i++){form=document.querySelector('#farmListTargetForm');if(form)break;await sleep(250);}
-              if(!form){result.error='farmListTargetForm did not render';return JSON.stringify(result);}
-              const xi=form.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]')||[...form.querySelectorAll('input')].find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
-              const yi=form.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]')||[...form.querySelectorAll('input')].find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
-              if(!xi||!yi){result.error='X/Y input not found';return JSON.stringify(result);}
-              const set=(e,v)=>{e.focus();e.value=String(v);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'Enter'}));};
-              set(xi,${x});set(yi,${y});result.steps.push('coordinates_filled');
-              const trigger=form.querySelector('.targetSelection,.targetSelectionResultWrapper,.troopSelection')||form;
-              trigger.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));trigger.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));trigger.dispatchEvent(new MouseEvent('click',{bubbles:true}));
-              let save=null;
-              for(let i=0;i<50;i++){
-                save=form.querySelector('button.save,button[type="submit"]');
-                const err=form.querySelector('.targetSelectionResultWrapper.hasError .targetSelectionValidation.show,.targetSelectionResultWrapper.hasError .customValidationRenderElement');
-                if(save && !save.disabled) break;
-                if(err && clean(err.textContent)){result.error='target validation: '+clean(err.textContent).slice(0,180);return JSON.stringify(result);}
+              for(let i=0;i<60;i++){
+                form=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm');
+                if(form) break;
                 await sleep(200);
               }
-              if(!save || save.disabled){result.error='Save button stayed disabled';return JSON.stringify(result);}
-              const troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
-              if(troopInput){set(troopInput,amount);result.steps.push('troop_filled');}
+              if(!form){
+                result.error='Farm target form did not render';
+                result.body=clean(document.body?.innerText).slice(-1200);
+                return JSON.stringify(result);
+              }
+              const inputs=[...form.querySelectorAll('input')];
+              const xi=form.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]')||
+                       inputs.find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
+              const yi=form.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]')||
+                       inputs.find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
+              if(!xi||!yi){result.error='X/Y input not found';return JSON.stringify(result);}
+              const set=(e,v)=>{
+                const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+                if(setter) setter.call(e,String(v)); else e.value=String(v);
+                e.dispatchEvent(new Event('input',{bubbles:true}));
+                e.dispatchEvent(new Event('change',{bubbles:true}));
+                e.dispatchEvent(new Event('blur',{bubbles:true}));
+              };
+              set(xi,${x}); set(yi,${y}); result.steps.push('coordinates_filled');
+              await sleep(800);
+
+              let troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
+              if(!troopInput){
+                troopInput=[...form.querySelectorAll('input.unitAmount,input[type="text"],input[type="number"]')]
+                  .find(e=>(e.name||'').toLowerCase()===troop.toLowerCase());
+              }
+              if(troopInput){ set(troopInput,amount); result.steps.push('troop_filled'); }
               else result.steps.push('troop_input_not_found');
-              await sleep(250);
-              save.click();result.steps.push('save_clicked');
-              for(let i=0;i<40;i++){if(!document.querySelector('#farmListTargetForm')){result.ok=true;return JSON.stringify(result);}await sleep(250);}
+
+              let save=null;
+              for(let i=0;i<60;i++){
+                save=form.querySelector('button.save,button[type="submit"],input[type="submit"],.save');
+                if(save && !save.disabled) break;
+                await sleep(200);
+              }
+              if(!save || save.disabled){
+                result.error='Save button unavailable/disabled';
+                result.formText=clean(form.innerText).slice(0,1200);
+                return JSON.stringify(result);
+              }
+              save.click(); result.steps.push('save_clicked');
+              for(let i=0;i<60;i++){
+                if(!document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm')){
+                  result.ok=true; return JSON.stringify(result);
+                }
+                await sleep(200);
+              }
               result.error='Save clicked but form remained open';
               return JSON.stringify(result);
             }catch(e){result.error=String(e&&e.message||e);return JSON.stringify(result);}
@@ -580,10 +705,10 @@ class MainActivity : AppCompatActivity() {
             val raw=unquoteJs(result)
             try {
                 val o=JSONObject(raw)
-                log("FARMLIST TARGET ${index+1}/${coords.size} (${x}|${y}) RESULT: ok=${o.optBoolean("ok")} lid=${o.optString("lid")} steps=${o.optJSONArray("steps")?.toString() ?: "[]"}")
-                if(o.has("error")) log("FARMLIST TARGET ERROR (${x}|${y}): ${o.optString("error")}")
+                log("FARMLIST TARGET ${index+1}/${coords.size} (${x}|${y}) RESULT: ok=${o.optBoolean("ok")} steps=${o.optJSONArray("steps")?.toString() ?: "[]"}")
+                if(o.has("error")) log("FARMLIST TARGET ERROR (${x}|${y}): ${o.optString("error").take(1000)}")
             } catch(e:Exception) { log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1500)}") }
-            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1) },450)
+            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1) },700)
             else log("FARMLIST END processed=${coords.size}")
         }
     }
