@@ -479,7 +479,7 @@ class MainActivity : AppCompatActivity() {
             text = "TRAVCO: ${db.travcoCount()} rows\nOASIS: ${db.oasisCount()} rows\n\n"
         })
         body.addView(TextView(this).apply {
-            setTextColor(Color.DKGRAY); textSize = 14f; typeface = android.graphics.Typeface.BOLD
+            setTextColor(Color.DKGRAY); textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
             text = "TRAVCO DB (max 80)"
         })
         body.addView(TextView(this).apply {
@@ -488,7 +488,7 @@ class MainActivity : AppCompatActivity() {
             setTextIsSelectable(true)
         })
         body.addView(TextView(this).apply {
-            setTextColor(Color.DKGRAY); textSize = 14f; typeface = android.graphics.Typeface.BOLD
+            setTextColor(Color.DKGRAY); textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
             text = "\nOASIS DB (max 120)"
         })
         body.addView(TextView(this).apply {
