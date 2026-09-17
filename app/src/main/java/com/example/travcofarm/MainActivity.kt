@@ -103,6 +103,8 @@ class MainActivity : AppCompatActivity() {
         content.addView(button("REFRESH FARMLIST AKUN") { loadFarmLists() })
         content.addView(button("MASUKKAN FARMLIST DARI TRAVCO") { addTravcoToFarmList() })
         content.addView(button("MASUKKAN FARMLIST DARI OASIS") { addOasisToFarmList() })
+        content.addView(logView)
+
         content.addView(label("WEBVIEW — DESKTOP MODE", 18f))
         webView = WebView(this).apply {
             layoutParams = LinearLayout.LayoutParams(-1, dp(520))
@@ -341,7 +343,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startOasisRequests(cx: Int, cy: Int, radius: Int) {
-        val step = 30
+        // /api/v1/map/position returns the useful tile metadata for oasis
+        // detection at zoomLevel=2. Keep a small overlap between requests
+        // so no tile is missed when scanning the requested radius.
+        val step = 20
         val startX = cx - radius
         val endX = cx + radius
         val startY = cy - radius
@@ -359,7 +364,7 @@ class MainActivity : AppCompatActivity() {
             val js = """
               (async function(){
                 const u=location.origin+'/api/v1/map/position';
-                const payload={data:{x:$x,y:$y,zoomLevel:3,ignorePositions:[]}};
+                const payload={data:{x:$x,y:$y,zoomLevel:2,ignorePositions:[]}};
                 const out={requestNo:$requestNo,x:$x,y:$y,url:u,payload:payload};
                 try{
                   const r=await fetch(u,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','accept':'application/json, text/plain, */*'},body:JSON.stringify(payload)});
@@ -428,24 +433,22 @@ class MainActivity : AppCompatActivity() {
                 val did = readIntFlexible(t, "did")
                 val title = t.optString("title")
                 val text = stripFormat(t.optString("text"))
-                if (did == -1 || did == null) didMinusOne++
-                val looksLikeOasis = title == "{k.fo}" || title == "{k.bt}" ||
-                    bonusRegex().containsMatchIn(text) ||
-                    Regex("\\b(25|50)\\s*%").containsMatchIn(text)
-                if (looksLikeOasis) titleOasis++
+                if (did == -1) didMinusOne++
+                if (title == "{k.fo}" || title == "{k.bt}") titleOasis++
                 if (bonusRegex().containsMatchIn(text)) bonusCandidate++
                 val x = readCoord(t, "x")
                 val y = readCoord(t, "y")
                 if (x != null && y != null) coordCandidate++
-                if (!sampleLogged && (looksLikeOasis || i == 0)) {
+                if (!sampleLogged && (title == "{k.fo}" || title == "{k.bt}" || i == 0)) {
                     log("OASIS TILE SAMPLE center=($requestX|$requestY) index=$i did=$did title='$title' x=$x y=$y text='${text.take(500)}'")
                     sampleLogged = true
                 }
-                if (did != -1 && did != null) continue
+                if (did != -1) continue
+                if (title != "{k.fo}" && title != "{k.bt}") continue
                 val type = mapOasisType(text)
                 if (type == null) continue
                 if (x == null || y == null) continue
-                val occupied = title == "{k.bt}" || (t.has("uid") && t.opt("uid") is Number) || t.optBoolean("occupied", false)
+                val occupied = title == "{k.bt}" || (t.has("uid") && t.opt("uid") is Number)
                 val animals = if (occupied) "" else parseAnimals(text)
                 val owner = if (occupied) extract(text, "\\{k\\.spieler\\}\\s*(.*?)\\s*(?:<br\\s*/?>|\\{k\\.|$)") else ""
                 val alliance = if (occupied) extract(text, "\\{k\\.allianz\\}\\s*(.*?)\\s*(?:<br\\s*/?>|\\{k\\.|$)") else ""
