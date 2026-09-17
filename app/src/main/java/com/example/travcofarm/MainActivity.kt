@@ -700,8 +700,32 @@ class MainActivity : AppCompatActivity() {
                   e.dispatchEvent(new Event('change',{bubbles:true}));
                   e.dispatchEvent(new Event('blur',{bubbles:true}));
                 };
-                set(xi,${x}); set(yi,${y}); result.steps.push('coordinates_filled');
-                await sleep(500);
+                // Isi koordinat X dan Y sesuai DOM Travian.
+                set(xi,${x});
+                set(yi,${y});
+                result.steps.push('X_filled=${x}');
+                result.steps.push('Y_filled=${y}');
+                await sleep(300);
+
+                // Klik area body/content popup untuk memicu update state/validasi Travian.
+                let popupBody =
+                  form.querySelector('.content') ||
+                  form.querySelector('.dialogContent') ||
+                  form.querySelector('.targetSelection') ||
+                  form.querySelector('.targetSelectionValidation') ||
+                  form;
+                try {
+                  popupBody.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,view:window}));
+                  popupBody.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,view:window}));
+                  popupBody.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));
+                  result.steps.push('popup_body_clicked');
+                } catch(e) {
+                  result.steps.push('popup_body_click_error');
+                }
+
+                // Tunggu 2 detik agar validasi/state tombol Save selesai.
+                await sleep(2000);
+                result.steps.push('wait_after_body=2000ms');
 
                 let troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
                 if(!troopInput){
@@ -712,17 +736,32 @@ class MainActivity : AppCompatActivity() {
                 else result.steps.push('troop_input_not_found');
 
                 let save=null;
-                for(let i=0;i<80;i++){
-                  save=form.querySelector('button.save,button[type="submit"],input[type="submit"],.save');
-                  if(save && !save.disabled) break;
-                  await sleep(150);
+                for(let i=0;i<20;i++){
+                  save=form.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green[type="submit"]') ||
+                       form.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green') ||
+                       form.querySelector('button.save[type="submit"]');
+                  if(save){
+                    result.steps.push('save_found_disabled='+!!save.disabled);
+                    if(!save.disabled) break;
+                  }
+                  await sleep(250);
                 }
-                if(!save || save.disabled){
-                  result.error='Save button unavailable/disabled';
+                if(!save){
+                  result.error='Save button not found';
                   result.formText=clean(form.innerText).slice(0,1600);
                   window[KEY]=result; return;
                 }
-                save.click(); result.steps.push('save_clicked');
+                if(save.disabled){
+                  result.error='Save button still disabled after body click + 2 seconds';
+                  result.formText=clean(form.innerText).slice(0,1600);
+                  window[KEY]=result; return;
+                }
+                try {
+                  save.scrollIntoView({block:'center',inline:'center'});
+                } catch(e) {}
+                await sleep(200);
+                save.click();
+                result.steps.push('save_clicked');
 
                 // Wait for the modal/form to disappear OR the target to appear in the list.
                 for(let i=0;i<80;i++){
