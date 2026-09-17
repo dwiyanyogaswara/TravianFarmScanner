@@ -2,6 +2,8 @@ package com.example.travcofarm
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -16,6 +18,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.app.AlertDialog
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -90,6 +93,11 @@ class MainActivity : AppCompatActivity() {
         oasisCount = label("Oasis DB: ${db.oasisCount()}")
         content.addView(oasisCount)
 
+        val dbRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        dbRow.addView(button("DB OVERVIEW") { showDbOverview() }, lp(1f))
+        dbRow.addView(button("COPY LOG") { copyLog() }, lp(1f))
+        content.addView(dbRow)
+
         content.addView(label("FARMLIST", 20f))
         content.addView(farmListInput)
         content.addView(unitInput)
@@ -103,6 +111,8 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setPadding(8, 4, 8, 12)
             typeface = android.graphics.Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            isVerticalScrollBarEnabled = true
         }
         content.addView(logView)
 
@@ -296,78 +306,203 @@ class MainActivity : AppCompatActivity() {
 
     private fun scanOasis() {
         val server = normalizeServer(serverInput.text.toString())
-        val cx=xInput.text.toString().toIntOrNull(); val cy=yInput.text.toString().toIntOrNull(); val radius=radiusInput.text.toString().toIntOrNull()
-        if(cx==null || cy==null || radius==null || radius<0) { log("OASIS ERROR: X/Y/radius invalid"); return }
+        val cx = xInput.text.toString().toIntOrNull()
+        val cy = yInput.text.toString().toIntOrNull()
+        val radius = radiusInput.text.toString().toIntOrNull()
+        if (cx == null || cy == null || radius == null || radius < 0) {
+            log("OASIS ERROR: X/Y/radius invalid x='${xInput.text}' y='${yInput.text}' radius='${radiusInput.text}'")
+            return
+        }
         log("OASIS SCAN START server=$server center=($cx|$cy) radius=$radius")
-        pageReady=false
+        log("OASIS DB BEFORE: total=${db.oasisCount()} unoccupied=${db.oasisUnoccupiedCount()} occupied=${db.oasisOccupiedCount()}")
+        pageReady = false
         webView.loadUrl("$server/karte.php")
-        handler.postDelayed({ startOasisRequests(cx,cy,radius) }, 2500)
+        handler.postDelayed({ verifyOasisPageAndStart(cx, cy, radius) }, 3000)
     }
 
-    private fun startOasisRequests(cx:Int, cy:Int, radius:Int) {
-        val step=30
-        val startX=cx-radius; val endX=cx+radius; val startY=cy-radius; val endY=cy+radius
-        val xs=(startX..endX step step).toMutableList().apply { if(lastOrNull()!=endX) add(endX) }
-        val ys=(startY..endY step step).toMutableList().apply { if(lastOrNull()!=endY) add(endY) }
-        oasisPending=xs.size*ys.size; oasisDone=0; oasisStartedAt=System.currentTimeMillis()
-        log("OASIS GRID: ${xs.size}x${ys.size}=$oasisPending API requests, step=$step, zoomLevel=3")
-        for(y in ys) for(x in xs) {
-            val js="""
+    private fun verifyOasisPageAndStart(cx: Int, cy: Int, radius: Int) {
+        webView.evaluateJavascript("""
+            (function(){
+              return JSON.stringify({
+                url:location.href,
+                title:document.title,
+                ready:document.readyState,
+                bodyChars:(document.body?.innerText||'').length,
+                hasTravianMap:!!document.querySelector('#map, .map, #mapContainer'),
+                cookieEnabled:navigator.cookieEnabled
+              });
+            })();
+        """.trimIndent()) { result ->
+            val raw = unquoteJs(result)
+            log("OASIS PAGE CHECK: ${raw.take(1000)}")
+            if (!currentPage.contains("karte.php", ignoreCase = true) && !raw.contains("karte.php", ignoreCase = true)) {
+                log("OASIS PAGE WARNING: current page is not karte.php; API may use wrong origin")
+            }
+            startOasisRequests(cx, cy, radius)
+        }
+    }
+
+    private fun startOasisRequests(cx: Int, cy: Int, radius: Int) {
+        val step = 30
+        val startX = cx - radius
+        val endX = cx + radius
+        val startY = cy - radius
+        val endY = cy + radius
+        val xs = (startX..endX step step).toMutableList().apply { if (lastOrNull() != endX) add(endX) }
+        val ys = (startY..endY step step).toMutableList().apply { if (lastOrNull() != endY) add(endY) }
+        oasisPending = xs.size * ys.size
+        oasisDone = 0
+        oasisStartedAt = System.currentTimeMillis()
+        log("OASIS GRID: ${xs.size}x${ys.size}=$oasisPending requests, step=$step, centersX=${xs.joinToString()}, centersY=${ys.joinToString()}")
+        var seq = 0
+        for (y in ys) for (x in xs) {
+            seq++
+            val requestNo = seq
+            val js = """
               (async function(){
                 const u=location.origin+'/api/v1/map/position';
+                const payload={data:{x:$x,y:$y,zoomLevel:3,ignorePositions:[]}};
+                const out={requestNo:$requestNo,x:$x,y:$y,url:u,payload:payload};
                 try{
-                  const r=await fetch(u,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({data:{x:$x,y:$y,zoomLevel:3,ignorePositions:[]}})});
+                  const r=await fetch(u,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','accept':'application/json, text/plain, */*'},body:JSON.stringify(payload)});
                   const t=await r.text();
-                  AndroidBridge.onOasisResponse(JSON.stringify({x:$x,y:$y,status:r.status,ok:r.ok,url:u,contentType:r.headers.get('content-type')||'',length:t.length,body:t.slice(0,800000)}));
-                }catch(e){AndroidBridge.onOasisResponse(JSON.stringify({x:$x,y:$y,status:0,ok:false,url:u,error:String(e)}));}
+                  out.status=r.status;out.ok=r.ok;out.contentType=r.headers.get('content-type')||'';out.length=t.length;out.body=t;
+                }catch(e){out.status=0;out.ok=false;out.error=String(e&&e.stack||e);}
+                AndroidBridge.onOasisResponse(JSON.stringify(out));
               })();
             """.trimIndent()
-            webView.evaluateJavascript(js,null)
+            log("OASIS REQUEST [$requestNo/$oasisPending]: center=($x|$y)")
+            webView.evaluateJavascript(js) { evalResult ->
+                val cleaned = cleanJsResult(evalResult)
+                if (cleaned.isNotBlank() && cleaned != "null") log("OASIS REQUEST JS RETURN [$requestNo]: ${cleaned.take(300)}")
+            }
         }
     }
 
     private inner class AndroidBridge {
-        @JavascriptInterface fun onOasisResponse(payload:String) {
+        @JavascriptInterface fun onOasisResponse(payload: String) {
             runOnUiThread {
                 oasisDone++
                 try {
-                    val o=JSONObject(payload)
-                    val status=o.optInt("status")
-                    val len=o.optInt("length")
-                    val x=o.optInt("x"); val y=o.optInt("y")
-                    log("OASIS API [$oasisDone/$oasisPending] center=($x|$y) HTTP=$status ok=${o.optBoolean("ok")} bytes=$len type=${o.optString("contentType")}")
-                    if(!o.optBoolean("ok")) { log("OASIS API ERROR: ${o.optString("error")} BODY=${o.optString("body").take(500)}") }
-                    else if(len==0) { log("OASIS API ERROR: HTTP body EMPTY at center=($x|$y)") }
-                    else parseOasisJson(o.optString("body"), x,y)
-                } catch(e:Exception) { log("OASIS BRIDGE PARSE ERROR: ${e.message}; payload=${payload.take(1200)}") }
-                if(oasisDone>=oasisPending) {
-                    oasisCount.text="Oasis DB: ${db.oasisCount()}"
-                    log("OASIS SCAN END saved=${db.oasisCount()} elapsed=${System.currentTimeMillis()-oasisStartedAt}ms")
+                    val o = JSONObject(payload)
+                    val status = o.optInt("status")
+                    val len = o.optInt("length")
+                    val x = o.optInt("x")
+                    val y = o.optInt("y")
+                    val body = o.optString("body")
+                    log("OASIS RESPONSE [$oasisDone/$oasisPending] center=($x|$y) HTTP=$status ok=${o.optBoolean("ok")} bytes=$len type=${o.optString("contentType")}")
+                    if (o.has("error")) {
+                        log("OASIS NETWORK ERROR center=($x|$y): ${o.optString("error").take(1000)}")
+                    } else if (len == 0 || body.isBlank()) {
+                        log("OASIS RESPONSE EMPTY center=($x|$y) HTTP=$status")
+                    } else {
+                        parseOasisJson(body, x, y)
+                    }
+                } catch (e: Exception) {
+                    log("OASIS BRIDGE ERROR: ${e.message}; PAYLOAD=${payload.take(1800)}")
+                }
+                if (oasisDone >= oasisPending) {
+                    oasisCount.text = "Oasis DB: ${db.oasisCount()}"
+                    log("OASIS DB AFTER: total=${db.oasisCount()} unoccupied=${db.oasisUnoccupiedCount()} occupied=${db.oasisOccupiedCount()}")
+                    log("OASIS SCAN END saved=${db.oasisCount()} elapsed=${System.currentTimeMillis() - oasisStartedAt}ms")
                 }
             }
         }
     }
 
-    private fun parseOasisJson(json:String, requestX:Int, requestY:Int) {
+    private fun parseOasisJson(json: String, requestX: Int, requestY: Int) {
         try {
-            val root=JSONObject(json); val tiles=root.optJSONArray("tiles")
-            if(tiles==null) { log("OASIS PARSE: no tiles[] at center=($requestX|$requestY), root=${json.take(300)}"); return }
-            var found=0
-            for(i in 0 until tiles.length()) {
-                val t=tiles.optJSONObject(i) ?: continue
-                val did=t.optInt("did", Int.MIN_VALUE); if(did!=-1) continue
-                val title=t.optString("title"); if(title!="{k.fo}" && title!="{k.bt}") continue
-                val text=stripFormat(t.optString("text")); val type=mapOasisType(text) ?: continue
-                val x=readCoord(t,"x"); val y=readCoord(t,"y"); if(x==null||y==null) continue
-                val occupied=title=="{k.bt}" || t.has("uid")
-                val animals=if(occupied) "" else parseAnimals(text)
-                val owner=if(occupied) extract(text,"\\{k\\.spieler\\}\\s*(.*?)\\s*(?:<br\\s*/?>|\\{k\\.|$)") else ""
-                val alliance=if(occupied) extract(text,"\\{k\\.allianz\\}\\s*(.*?)\\s*(?:<br\\s*/?>|\\{k\\.|$)") else ""
-                db.insertOasis(x,y,occupied,type.first,type.second,animals,owner,alliance)
-                found++
+            val root = JSONObject(json)
+            val keys = root.keys().asSequence().toList()
+            val tiles = root.optJSONArray("tiles")
+            if (tiles == null) {
+                log("OASIS PARSE ERROR center=($requestX|$requestY): no tiles[]; rootKeys=${keys.joinToString()}; rootPreview=${json.take(1200)}")
+                return
             }
-            if(found>0) log("OASIS PARSE: center=($requestX|$requestY) tiles=${tiles.length()} oasisSaved=$found")
-        } catch(e:Exception) { log("OASIS JSON ERROR center=($requestX|$requestY): ${e.message}; JSON=${json.take(1200)}") }
+            var didMinusOne = 0
+            var titleOasis = 0
+            var bonusCandidate = 0
+            var coordCandidate = 0
+            var saved = 0
+            var sampleLogged = false
+            for (i in 0 until tiles.length()) {
+                val t = tiles.optJSONObject(i) ?: continue
+                val did = readIntFlexible(t, "did")
+                val title = t.optString("title")
+                val text = stripFormat(t.optString("text"))
+                if (did == -1) didMinusOne++
+                if (title == "{k.fo}" || title == "{k.bt}") titleOasis++
+                if (bonusRegex().containsMatchIn(text)) bonusCandidate++
+                val x = readCoord(t, "x")
+                val y = readCoord(t, "y")
+                if (x != null && y != null) coordCandidate++
+                if (!sampleLogged && (title == "{k.fo}" || title == "{k.bt}" || i == 0)) {
+                    log("OASIS TILE SAMPLE center=($requestX|$requestY) index=$i did=$did title='$title' x=$x y=$y text='${text.take(500)}'")
+                    sampleLogged = true
+                }
+                if (did != -1) continue
+                if (title != "{k.fo}" && title != "{k.bt}") continue
+                val type = mapOasisType(text)
+                if (type == null) continue
+                if (x == null || y == null) continue
+                val occupied = title == "{k.bt}" || (t.has("uid") && t.opt("uid") is Number)
+                val animals = if (occupied) "" else parseAnimals(text)
+                val owner = if (occupied) extract(text, "\\{k\\.spieler\\}\\s*(.*?)\\s*(?:<br\\s*/?>|\\{k\\.|$)") else ""
+                val alliance = if (occupied) extract(text, "\\{k\\.allianz\\}\\s*(.*?)\\s*(?:<br\\s*/?>|\\{k\\.|$)") else ""
+                db.insertOasis(x, y, occupied, type.first, type.second, animals, owner, alliance)
+                saved++
+                if (saved <= 10) log("OASIS SAVE [$saved]: ($x|$y) type=${type.first} occupied=$occupied animals='${animals.take(120)}'")
+            }
+            log("OASIS PARSE center=($requestX|$requestY): tiles=${tiles.length()} did=-1:$didMinusOne titleOasis:$titleOasis bonus:$bonusCandidate coords:$coordCandidate saved:$saved")
+        } catch (e: Exception) {
+            log("OASIS JSON ERROR center=($requestX|$requestY): ${e.message}; JSON=${json.take(2000)}")
+        }
+    }
+
+    private fun copyLog() {
+        val text = logView.text?.toString().orEmpty()
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Travian Farm Scanner Log", text))
+        log("LOG COPIED: ${text.length} chars")
+    }
+
+    private fun showDbOverview() {
+        val travco = db.travcoOverview(80)
+        val oasis = db.oasisOverview(120)
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(8))
+        }
+        body.addView(TextView(this).apply {
+            setTextColor(Color.DKGRAY)
+            textSize = 15f
+            text = "TRAVCO: ${db.travcoCount()} rows\nOASIS: ${db.oasisCount()} rows\n\n"
+        })
+        body.addView(TextView(this).apply {
+            setTextColor(Color.DKGRAY); textSize = 14f; typeface = android.graphics.Typeface.BOLD
+            text = "TRAVCO DB (max 80)"
+        })
+        body.addView(TextView(this).apply {
+            setTextColor(Color.DKGRAY); textSize = 12f; typeface = android.graphics.Typeface.MONOSPACE
+            text = if (travco.isBlank()) "(empty)" else travco
+            setTextIsSelectable(true)
+        })
+        body.addView(TextView(this).apply {
+            setTextColor(Color.DKGRAY); textSize = 14f; typeface = android.graphics.Typeface.BOLD
+            text = "\nOASIS DB (max 120)"
+        })
+        body.addView(TextView(this).apply {
+            setTextColor(Color.DKGRAY); textSize = 12f; typeface = android.graphics.Typeface.MONOSPACE
+            text = if (oasis.isBlank()) "(empty)" else oasis
+            setTextIsSelectable(true)
+        })
+        val scroll = ScrollView(this).apply { addView(body) }
+        AlertDialog.Builder(this)
+            .setTitle("DATABASE OVERVIEW")
+            .setView(scroll)
+            .setPositiveButton("CLOSE", null)
+            .show()
+        log("DB OVERVIEW: travco=${db.travcoCount()} oasis=${db.oasisCount()} freeOasis=${db.oasisUnoccupiedCount()} occupiedOasis=${db.oasisOccupiedCount()}")
     }
 
     private fun addTravcoToFarmList() { addFromDb(false) }
@@ -450,6 +585,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun bonusRegex(): Regex = Regex("\\{a:r([1-4])\\}[^%]{0,100}(25|50)\\s*%", RegexOption.IGNORE_CASE)
     private fun mapOasisType(text:String):Pair<String,String>? {
         val bonuses=Regex("\\{a:r([1-4])\\}[^%]{0,40}(25|50)%",RegexOption.IGNORE_CASE).findAll(text).map{it.groupValues[1].toInt() to it.groupValues[2].toInt()}.distinct().sortedWith(compareBy({it.first},{it.second})).toList()
         return when(bonuses){
@@ -471,14 +607,19 @@ class MainActivity : AppCompatActivity() {
     private fun animalName(id:Int)=when(id){31->"Rat";32->"Spider";33->"Snake";34->"Bat";35->"Wild Boar";36->"Wolf";37->"Bear";38->"Crocodile";39->"Tiger";40->"Elephant";else->"u$id"}
     private fun extract(text:String,pattern:String)=Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(text)?.groupValues?.getOrNull(1)?.replace(Regex("<[^>]+>"),"")?.trim().orEmpty()
     private fun stripFormat(s:String)=s.filter{it.code !in 0x200B..0x206F}
-    private fun readCoord(t:JSONObject,n:String):Int?=if(t.has(n)) t.optString(n).toIntOrNull() ?: t.optInt(n).takeIf{t.opt(n) is Number} else t.optJSONObject("position")?.optString(n)?.toIntOrNull() ?: t.optJSONObject("coordinates")?.optString(n)?.toIntOrNull()
+    private fun readIntFlexible(t: JSONObject, n: String): Int? = t.optString(n).toIntOrNull() ?: t.opt(n).let { if (it is Number) it.toInt() else null }
+    private fun readCoord(t:JSONObject,n:String):Int?=readIntFlexible(t,n) ?: t.optJSONObject("position")?.let{readIntFlexible(it,n)} ?: t.optJSONObject("coordinates")?.let{readIntFlexible(it,n)}
 
     private fun normalizeServer(value:String):String { var s=value.trim(); if(!s.startsWith("http")) s="https://$s"; return s.trimEnd('/') }
     private fun jsEscape(s:String)=s.replace("\\","\\\\").replace("'","\\'")
     private fun unquoteJs(s:String):String=try{ JSONTokener(s).nextValue()?.toString() ?: "" }catch(_:Exception){s.trim('"').replace("\\\"", "\"").replace("\\n", "\n")}
     private fun cleanJsResult(s:String)=unquoteJs(s).replace("\\u003C","<").replace("\\u003E",">").take(1800)
 
-    private fun log(message:String) { val line="${java.text.SimpleDateFormat("HH:mm:ss.SSS").format(java.util.Date())} | $message\n"; logView.append(line) }
+    private fun log(message:String) {
+        val line="${java.text.SimpleDateFormat("HH:mm:ss.SSS").format(java.util.Date())} | $message\n"
+        logView.append(line)
+        logView.post { logView.layout?.let { if (it.lineCount > 0) logView.scrollTo(0, it.getLineTop(it.lineCount - 1)) } }
+    }
     private fun edit(hint:String,value:String)=EditText(this).apply{setHint(hint);setText(value);setTextColor(Color.WHITE);setHintTextColor(Color.LTGRAY);textSize=18f}
     private fun label(text:String,size:Float=16f)=TextView(this).apply{this.text=text;setTextColor(Color.LTGRAY);textSize=size;setPadding(0,10,0,8)}
     private fun button(text:String,onClick:()->Unit)=Button(this).apply{this.text=text;setOnClickListener{onClick()};isAllCaps=false}
@@ -497,6 +638,31 @@ class MainActivity : AppCompatActivity() {
         fun insertOasis(x:Int,y:Int,o:Boolean,t:String,f:String,a:String,owner:String,alliance:String){writableDatabase.execSQL("INSERT OR REPLACE INTO oasis(x,y,occupied,oasisType,filterType,animals,owner,alliance) VALUES(?,?,?,?,?,?,?,?)",arrayOf(x,y,if(o)1 else 0,t,f,a,owner,alliance))}
         fun travcoCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM travco",null).use{it.moveToFirst();it.getInt(0)}
         fun oasisCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis",null).use{it.moveToFirst();it.getInt(0)}
+        fun oasisUnoccupiedCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis WHERE occupied=0",null).use{it.moveToFirst();it.getInt(0)}
+        fun oasisOccupiedCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis WHERE occupied=1",null).use{it.moveToFirst();it.getInt(0)}
+        fun travcoOverview(limit:Int):String = readableDatabase.rawQuery("SELECT x,y,village,account,population,distance FROM travco ORDER BY distance ASC LIMIT ?", arrayOf(limit.toString())).use { c ->
+            val b=StringBuilder()
+            while(c.moveToNext()) {
+                b.append("(").append(c.getInt(0)).append("|").append(c.getInt(1)).append(") ")
+                    .append(c.getString(2) ?: "").append(" | ")
+                    .append(c.getString(3) ?: "").append(" | pop=")
+                    .append(c.getInt(4)).append(" | dist=").append(c.getDouble(5)).append("\n")
+            }
+            b.toString()
+        }
+        fun oasisOverview(limit:Int):String = readableDatabase.rawQuery("SELECT x,y,oasisType,occupied,animals,owner,alliance FROM oasis ORDER BY y,x LIMIT ?", arrayOf(limit.toString())).use { c ->
+            val b=StringBuilder()
+            while(c.moveToNext()) {
+                b.append("(").append(c.getInt(0)).append("|").append(c.getInt(1)).append(") ")
+                    .append(c.getString(2) ?: "").append(" | ")
+                    .append(if(c.getInt(3)!=0) "OCC" else "FREE")
+                    .append(" | ").append(c.getString(4) ?: "")
+                if (!c.getString(5).orEmpty().isBlank()) b.append(" | owner=").append(c.getString(5))
+                if (!c.getString(6).orEmpty().isBlank()) b.append(" | alliance=").append(c.getString(6))
+                b.append("\n")
+            }
+            b.toString()
+        }
         fun travcoCoords(): List<Pair<Int, Int>> = coords("SELECT x,y FROM travco ORDER BY distance ASC")
         fun oasisCoords(): List<Pair<Int, Int>> = coords("SELECT x,y FROM oasis WHERE occupied=0 ORDER BY id")
         private fun coords(sql:String):List<Pair<Int,Int>>{val r=ArrayList<Pair<Int,Int>>();readableDatabase.rawQuery(sql,null).use{while(it.moveToNext())r.add(it.getInt(0) to it.getInt(1))};return r}
