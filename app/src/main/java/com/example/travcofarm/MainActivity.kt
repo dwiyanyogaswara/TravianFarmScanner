@@ -22,8 +22,6 @@ import android.app.AlertDialog
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
-import android.widget.ArrayAdapter
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
@@ -38,8 +36,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var xInput: EditText
     private lateinit var yInput: EditText
     private lateinit var radiusInput: EditText
-    private lateinit var farmListSpinner: Spinner
-    private val farmLists = mutableListOf<String>()
+    private lateinit var farmListInput: EditText
+    private lateinit var unitInput: EditText
+    private lateinit var countInput: EditText
     private lateinit var logView: TextView
     private lateinit var webView: WebView
     private lateinit var travcoCount: TextView
@@ -72,8 +71,9 @@ class MainActivity : AppCompatActivity() {
         xInput = edit("X", "97")
         yInput = edit("Y", "-83")
         radiusInput = edit("Radius", "50")
-        farmListSpinner = Spinner(this)
-        farmListSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, farmLists)
+        farmListInput = edit("Nama farmlist yang sudah ada", "")
+        unitInput = edit("Unit, contoh t1", "t1")
+        countInput = edit("Jumlah unit, contoh 20", "20")
 
         content.addView(serverInput)
         content.addView(xInput)
@@ -99,10 +99,21 @@ class MainActivity : AppCompatActivity() {
         content.addView(dbRow)
 
         content.addView(label("FARMLIST", 20f))
-        content.addView(farmListSpinner)
-        content.addView(button("REFRESH FARMLIST AKUN") { loadFarmLists() })
+        content.addView(farmListInput)
+        content.addView(unitInput)
+        content.addView(countInput)
         content.addView(button("MASUKKAN FARMLIST DARI TRAVCO") { addTravcoToFarmList() })
         content.addView(button("MASUKKAN FARMLIST DARI OASIS") { addOasisToFarmList() })
+
+        content.addView(label("LOG", 18f))
+        logView = TextView(this).apply {
+            setTextColor(Color.LTGRAY)
+            textSize = 12f
+            setPadding(8, 4, 8, 12)
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            isVerticalScrollBarEnabled = true
+        }
         content.addView(logView)
 
         content.addView(label("WEBVIEW — DESKTOP MODE", 18f))
@@ -124,17 +135,6 @@ class MainActivity : AppCompatActivity() {
         }
         configureWebView()
         content.addView(webView)
-
-        content.addView(label("LOG", 18f))
-        logView = TextView(this).apply {
-            setTextColor(Color.LTGRAY)
-            textSize = 12f
-            setPadding(8, 4, 8, 12)
-            typeface = android.graphics.Typeface.MONOSPACE
-            setTextIsSelectable(true)
-            isVerticalScrollBarEnabled = true
-        }
-        content.addView(logView)
 
         setContentView(root)
         log("APP START")
@@ -508,58 +508,23 @@ class MainActivity : AppCompatActivity() {
         log("DB OVERVIEW: travco=${db.travcoCount()} oasis=${db.oasisCount()} freeOasis=${db.oasisUnoccupiedCount()} occupiedOasis=${db.oasisOccupiedCount()}")
     }
 
-    private fun selectedFarmList(): String {
-        return if (farmLists.isNotEmpty() && farmListSpinner.selectedItemPosition >= 0)
-            farmLists[farmListSpinner.selectedItemPosition]
-        else ""
-    }
-
-    private fun loadFarmLists() {
-        val server = normalizeServer(serverInput.text.toString())
-        log("FARMLIST LOAD START")
-        webView.loadUrl("$server/build.php?id=39&gid=16&tt=99")
-        handler.postDelayed({
-            val js = """
-                (function(){
-                  const clean=v=>(v||'').replace(/\\s+/g,' ').trim();
-                  const norm=v=>clean(v).replace(/\\(\\d+\\s*farms?\\)/ig,'').trim();
-                  const wrappers=[...document.querySelectorAll('#rallyPointFarmList .farmListWrapper')];
-                  const lists=wrappers.map(w=>norm(w.querySelector('.farmListName .name')?.textContent||w.querySelector('.farmListName')?.textContent||'')).filter(Boolean);
-                  return JSON.stringify({url:location.href,count:lists.length,lists:lists});
-                })();
-            """.trimIndent()
-            webView.evaluateJavascript(js) { raw ->
-                try {
-                    val o=JSONObject(unquoteJs(raw))
-                    val arr=o.optJSONArray("lists") ?: JSONArray()
-                    farmLists.clear()
-                    for(i in 0 until arr.length()) farmLists.add(arr.optString(i))
-                    @Suppress("UNCHECKED_CAST")
-                    (farmListSpinner.adapter as? ArrayAdapter<String>)?.notifyDataSetChanged()
-                    if(farmLists.isEmpty()) log("FARMLIST LOAD ERROR: tidak ada farmlist ditemukan url=${o.optString("url")}")
-                    else log("FARMLIST LOAD OK: ${farmLists.size} list = ${farmLists.joinToString()}")
-                } catch(e:Exception) {
-                    log("FARMLIST LOAD PARSE ERROR: ${e.message}; RAW=${cleanJsResult(raw)}")
-                }
-            }
-        }, 1800)
-    }
-
     private fun addTravcoToFarmList() { addFromDb(false) }
     private fun addOasisToFarmList() { addFromDb(true) }
 
     private fun addFromDb(oasis:Boolean) {
-        val list=selectedFarmList()
+        val list=farmListInput.text.toString().trim(); val unit=unitInput.text.toString().trim(); val count=countInput.text.toString().toIntOrNull() ?: 0
+        if(list.isBlank() || unit.isBlank() || count<=0) { log("FARMLIST ERROR: list/unit/count invalid"); return }
         val rows=if(oasis) db.oasisCoords() else db.travcoCoords()
-        log("FARMLIST START source=${if(oasis) "OASIS" else "TRAVCO"} list='$list' targets=${rows.size} troops=DEFAULT_FROM_ACCOUNT_FARMLIST")
-        if(list.isBlank()) { log("FARMLIST ERROR: pilih Farmlist dari dropdown"); return }
+        log("FARMLIST START source=${if(oasis) "OASIS" else "TRAVCO"} list='$list' targets=${rows.size} unit=$unit count=$count")
         if(rows.isEmpty()) { log("FARMLIST ERROR: database source empty"); return }
         val server=normalizeServer(serverInput.text.toString())
         webView.loadUrl("$server/build.php?id=39&gid=16&tt=99")
-        handler.postDelayed({ addFarmTargetsSequentially(list,rows,0) },3000)
+        handler.postDelayed({
+            addFarmTargetsSequentially(list,unit,count,rows,0)
+        },3000)
     }
 
-    private fun addFarmTargetsSequentially(list:String,coords:List<Pair<Int,Int>>,index:Int) {
+    private fun addFarmTargetsSequentially(list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int) {
         if(index>=coords.size) { log("FARMLIST END completed=${coords.size}"); return }
         val (x,y)=coords[index]
         val js="""
@@ -568,80 +533,43 @@ class MainActivity : AppCompatActivity() {
             const clean=v=>(v||'').replace(/\\s+/g,' ').trim();
             const norm=v=>clean(v).replace(/\\(\\d+\\s*farms?\\)/ig,'').replace(/\\bdelete\\b/ig,'').trim().toLowerCase();
             const targetName=${JSONObject.quote(list)};
-            const result={x:${x},y:${y},url:location.href,steps:[],troops:{}};
+            const troop=${JSONObject.quote(unit)};
+            const amount=${count};
+            const result={x:${x},y:${y},url:location.href,steps:[]};
             try{
+              if(!location.href.includes('gid=16')) result.steps.push('page_not_farm_list');
               const wrappers=[...document.querySelectorAll('#rallyPointFarmList .farmListWrapper')];
-              const wrapper=wrappers.find(w=>norm(w.querySelector('.farmListName .name')?.textContent||w.querySelector('.farmListName')?.textContent)===norm(targetName));
+              const wrapper=wrappers.find(w=>norm(w.querySelector('.farmListName .name')?.textContent)===norm(targetName));
               if(!wrapper){result.error='Farm List not found';return JSON.stringify(result);}
               const lid=wrapper.querySelector('.dragAndDrop[data-list]')?.getAttribute('data-list')||'';
               result.lid=lid;
-              // Ambil konfigurasi troop langsung dari Farmlist akun yang dipilih.
-              [...wrapper.querySelectorAll('input[name],input.unitAmount')].forEach(e=>{
-                const n=e.name||''; const v=(e.value||'').trim();
-                if(n && /^(t\\d+|u\\d+)$/.test(n) && v) result.troops[n]=v;
-              });
               const add=wrapper.querySelector('td.addTarget a, td.addTarget button');
               if(!add){result.error='Add Target button not found';return JSON.stringify(result);}
               add.click(); result.steps.push('open_add_target');
               let form=null;
-              for(let i=0;i<50;i++){form=document.querySelector('#farmListTargetForm');if(form)break;await sleep(200);}
+              for(let i=0;i<40;i++){form=document.querySelector('#farmListTargetForm');if(form)break;await sleep(250);}
               if(!form){result.error='farmListTargetForm did not render';return JSON.stringify(result);}
-
-              const inputs=[...form.querySelectorAll('input')];
-              const findInput=(patterns)=>inputs.find(e=>patterns.some(p=>p.test((e.name||'')+' '+(e.id||'')+' '+(e.className||''))));
-              const xi=findInput([/^x$/i,/xcoord/i,/coordx/i,/coordinatex/i]);
-              const yi=findInput([/^y$/i,/ycoord/i,/coordy/i,/coordinatey/i]);
-              if(!xi||!yi){
-                result.error='X/Y input not found';
-                result.inputs=inputs.map(e=>({name:e.name,id:e.id,type:e.type,value:e.value}));
-                return JSON.stringify(result);
-              }
-
-              const nativeSet=(e,v)=>{
-                const proto=e instanceof HTMLInputElement ? HTMLInputElement.prototype : Object.getPrototypeOf(e);
-                const desc=Object.getOwnPropertyDescriptor(proto,'value');
-                if(desc&&desc.set) desc.set.call(e,String(v)); else e.value=String(v);
-                e.dispatchEvent(new Event('input',{bubbles:true}));
-                e.dispatchEvent(new Event('change',{bubbles:true}));
-                e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'Enter',code:'Enter'}));
-                e.dispatchEvent(new Event('blur',{bubbles:true}));
-              };
-              nativeSet(xi,${x}); nativeSet(yi,${y});
-              result.steps.push('coordinates_filled');
-              result.actualXY={x:xi.value,y:yi.value};
-              if(String(xi.value)!==String(${x}) || String(yi.value)!==String(${y})){
-                result.error='X/Y value rejected after setter'; return JSON.stringify(result);
-              }
-
-              // Trigger validasi target setelah X/Y benar-benar terisi.
+              const xi=form.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]')||[...form.querySelectorAll('input')].find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
+              const yi=form.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]')||[...form.querySelectorAll('input')].find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
+              if(!xi||!yi){result.error='X/Y input not found';return JSON.stringify(result);}
+              const set=(e,v)=>{e.focus();e.value=String(v);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'Enter'}));};
+              set(xi,${x});set(yi,${y});result.steps.push('coordinates_filled');
               const trigger=form.querySelector('.targetSelection,.targetSelectionResultWrapper,.troopSelection')||form;
-              ['input','change'].forEach(type=>trigger.dispatchEvent(new Event(type,{bubbles:true})));
-              trigger.dispatchEvent(new MouseEvent('click',{bubbles:true}));
-
-              // Tunggu hasil target dan isi troop dari Farmlist akun.
-              for(let i=0;i<50;i++){
-                const err=form.querySelector('.targetSelectionResultWrapper.hasError .targetSelectionValidation.show,.targetSelectionResultWrapper.hasError .customValidationRenderElement');
-                if(err&&clean(err.textContent)){result.error='target validation: '+clean(err.textContent).slice(0,180);return JSON.stringify(result);}
-                const hasTarget=form.querySelector('.targetSelectionResultWrapper,.troopSelection');
-                if(hasTarget) break;
-                await sleep(200);
-              }
-
-              const troopEntries=Object.entries(result.troops);
-              for(const [name,value] of troopEntries){
-                const ti=form.querySelector('input[name="'+CSS.escape(name)+'"],input.unitAmount[name="'+CSS.escape(name)+'"]');
-                if(ti){nativeSet(ti,value);}
-              }
-              result.steps.push('troops_filled_from_account_farmlist');
-
+              trigger.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));trigger.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));trigger.dispatchEvent(new MouseEvent('click',{bubbles:true}));
               let save=null;
               for(let i=0;i<50;i++){
-                save=form.querySelector('button.save,button[type="submit"],input[type="submit"]');
+                save=form.querySelector('button.save,button[type="submit"]');
+                const err=form.querySelector('.targetSelectionResultWrapper.hasError .targetSelectionValidation.show,.targetSelectionResultWrapper.hasError .customValidationRenderElement');
                 if(save && !save.disabled) break;
+                if(err && clean(err.textContent)){result.error='target validation: '+clean(err.textContent).slice(0,180);return JSON.stringify(result);}
                 await sleep(200);
               }
               if(!save || save.disabled){result.error='Save button stayed disabled';return JSON.stringify(result);}
-              save.click(); result.steps.push('save_clicked');
+              const troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
+              if(troopInput){set(troopInput,amount);result.steps.push('troop_filled');}
+              else result.steps.push('troop_input_not_found');
+              await sleep(250);
+              save.click();result.steps.push('save_clicked');
               for(let i=0;i<40;i++){if(!document.querySelector('#farmListTargetForm')){result.ok=true;return JSON.stringify(result);}await sleep(250);}
               result.error='Save clicked but form remained open';
               return JSON.stringify(result);
@@ -652,10 +580,10 @@ class MainActivity : AppCompatActivity() {
             val raw=unquoteJs(result)
             try {
                 val o=JSONObject(raw)
-                log("FARMLIST TARGET ${index+1}/${coords.size} (${x}|${y}) RESULT: ok=${o.optBoolean("ok")} lid=${o.optString("lid")} actualXY=${o.optJSONObject("actualXY")?.toString() ?: "-"} troops=${o.optJSONObject("troops")?.toString() ?: "{}"} steps=${o.optJSONArray("steps")?.toString() ?: "[]"}")
+                log("FARMLIST TARGET ${index+1}/${coords.size} (${x}|${y}) RESULT: ok=${o.optBoolean("ok")} lid=${o.optString("lid")} steps=${o.optJSONArray("steps")?.toString() ?: "[]"}")
                 if(o.has("error")) log("FARMLIST TARGET ERROR (${x}|${y}): ${o.optString("error")}")
-            } catch(e:Exception) { log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}") }
-            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,coords,index+1) },650)
+            } catch(e:Exception) { log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1500)}") }
+            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1) },450)
             else log("FARMLIST END processed=${coords.size}")
         }
     }
