@@ -23,8 +23,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Spinner
-import android.widget.ArrayAdapter
+import android.widget.CheckBox
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
 import org.json.JSONObject
@@ -39,8 +38,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var yInput: EditText
     private lateinit var radiusInput: EditText
     private lateinit var farmListInput: EditText
-    private lateinit var farmListSpinner: Spinner
+    private lateinit var farmListChecks: LinearLayout
     private val farmListNames = mutableListOf<String>()
+    private val selectedFarmLists = linkedSetOf<String>()
     private lateinit var unitInput: EditText
     private lateinit var countInput: EditText
     private lateinit var logView: TextView
@@ -76,8 +76,10 @@ class MainActivity : AppCompatActivity() {
         yInput = edit("Y", "-83")
         radiusInput = edit("Radius", "50")
         farmListInput = edit("Nama farmlist yang sudah ada", "")
-        farmListSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, farmListNames)
+        farmListChecks = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(8, 8, 8, 8)
+            setBackgroundColor(Color.rgb(60, 60, 60))
         }
         unitInput = edit("Unit (default t1)", "t1")
         countInput = edit("Jumlah unit (default 20)", "20")
@@ -105,8 +107,8 @@ class MainActivity : AppCompatActivity() {
         dbRow.addView(button("COPY LOG") { copyLog() }, lp(1f))
         content.addView(dbRow)
 
-        content.addView(label("FARMLIST AKUN", 20f))
-        content.addView(farmListSpinner)
+        content.addView(label("FARMLIST AKUN (CHECKLIST)", 20f))
+        content.addView(farmListChecks)
         content.addView(button("REFRESH FARMLIST DARI AKUN") { loadFarmLists() })
         // Hidden/unused text field is kept only for compatibility with older code.
         farmListInput.visibility = android.view.View.GONE
@@ -522,9 +524,27 @@ class MainActivity : AppCompatActivity() {
         log("DB OVERVIEW: travco=${db.travcoCount()} oasis=${db.oasisCount()} freeOasis=${db.oasisUnoccupiedCount()} occupiedOasis=${db.oasisOccupiedCount()}")
     }
 
-    private fun selectedFarmListName(): String {
-        val selected = farmListSpinner.selectedItem?.toString()?.trim().orEmpty()
-        return if (selected.isNotBlank()) selected else farmListInput.text.toString().trim()
+    private fun selectedFarmListNames(): List<String> {
+        return selectedFarmLists.map { it.trim() }.filter { it.isNotBlank() }
+    }
+
+    private fun rebuildFarmListChecks() {
+        farmListChecks.removeAllViews()
+        val oldSelected = selectedFarmLists.toSet()
+        selectedFarmLists.clear()
+        for (name in farmListNames) {
+            val cb = CheckBox(this).apply {
+                text = name
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                isChecked = oldSelected.contains(name)
+                setOnCheckedChangeListener { _, checked ->
+                    if (checked) selectedFarmLists.add(name) else selectedFarmLists.remove(name)
+                }
+            }
+            if (cb.isChecked) selectedFarmLists.add(name)
+            farmListChecks.addView(cb, LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
     }
 
     private fun loadFarmLists(navigate: Boolean = true) {
@@ -566,10 +586,8 @@ class MainActivity : AppCompatActivity() {
                     val arr=o.optJSONArray("names") ?: JSONArray()
                     farmListNames.clear()
                     for(i in 0 until arr.length()) farmListNames.add(arr.optString(i))
-                    val adapter = farmListSpinner.adapter as? ArrayAdapter<String>
-                    adapter?.notifyDataSetChanged()
+                    rebuildFarmListChecks()
                     if(farmListNames.isNotEmpty()) {
-                        farmListSpinner.setSelection(0)
                         farmListInput.setText(farmListNames[0])
                         log("FARMLIST LOAD END: ${farmListNames.size} list ditemukan: ${farmListNames.joinToString(" | ")}")
                     } else {
@@ -593,26 +611,53 @@ class MainActivity : AppCompatActivity() {
     private fun addOasisToFarmList() { addFromDb(true) }
 
     private fun addFromDb(oasis:Boolean) {
-        val list=selectedFarmListName()
+        val lists=selectedFarmListNames()
         val unit=unitInput.text.toString().trim().ifBlank { "t1" }
         val count=countInput.text.toString().toIntOrNull()?.takeIf { it > 0 } ?: 20
-        if(list.isBlank()) { log("FARMLIST ERROR: belum ada farmlist dari akun"); loadFarmLists(); return }
+        if(lists.isEmpty()) {
+            log("FARMLIST ERROR: checklist farmlist belum dipilih")
+            loadFarmLists()
+            return
+        }
         val rows=if(oasis) db.oasisCoords() else db.travcoCoords()
         if(oasis) {
-            log("FARMLIST START source=OASIS list='$list' targets=${rows.size} (troops tidak di-set)")
+            log("FARMLIST START source=OASIS lists=${lists.joinToString(" | ")} targets=${rows.size} (maks 100 target/list, troops tidak di-set)")
         } else {
-            log("FARMLIST START source=TRAVCO list='$list' targets=${rows.size} unit=$unit count=$count")
+            log("FARMLIST START source=TRAVCO lists=${lists.joinToString(" | ")} targets=${rows.size} (maks 100 target/list) unit=$unit count=$count")
         }
         if(rows.isEmpty()) { log("FARMLIST ERROR: database source empty"); return }
+
+        val requiredLists=ceil(rows.size / 100.0).toInt()
+        if(lists.size < requiredLists) {
+            log("FARMLIST ERROR: ${rows.size} target membutuhkan $requiredLists farmlist (100 target/list), tetapi hanya ${lists.size} checklist")
+            return
+        }
+
         val server=normalizeServer(serverInput.text.toString())
         webView.loadUrl("$server/build.php?gid=16&tt=99")
         handler.postDelayed({
-            addFarmTargetsSequentially(list, if(oasis) "" else unit, if(oasis) 0 else count, rows, 0, oasis)
+            val firstEnd=minOf(100, rows.size)
+            addFarmTargetsSequentially(lists[0], if(oasis) "" else unit, if(oasis) 0 else count, rows.subList(0, firstEnd), 0, oasis, lists, 0)
         },4500)
     }
 
-    private fun addFarmTargetsSequentially(list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,oasis:Boolean=false) {
-        if(index>=coords.size) { log("FARMLIST END completed=${coords.size}"); return }
+    private fun addFarmTargetsSequentially(list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,oasis:Boolean=false,allLists:List<String> = listOf(list),listIndex:Int=0) {
+        if(index>=coords.size) {
+            val completedBefore = listIndex * 100 + coords.size
+            if(completedBefore < 1) { log("FARMLIST END completed=0"); return }
+            val nextStart = completedBefore
+            if(nextStart < (if(oasis) db.oasisCoords().size else db.travcoCoords().size)) {
+                val allRows = if(oasis) db.oasisCoords() else db.travcoCoords()
+                val nextListIndex = listIndex + 1
+                if(nextListIndex >= allLists.size) { log("FARMLIST ERROR: farmlist tidak cukup untuk sisa target"); return }
+                val nextEnd=minOf(nextStart + 100, allRows.size)
+                log("FARMLIST NEXT: '${allLists[nextListIndex]}' targets ${nextStart+1}-$nextEnd")
+                addFarmTargetsSequentially(allLists[nextListIndex],unit,count,allRows.subList(nextStart,nextEnd),0,oasis,allLists,nextListIndex)
+            } else {
+                log("FARMLIST END completed=$completedBefore")
+            }
+            return
+        }
         val (x,y)=coords[index]
         val token = "travcoFarmResult_${System.currentTimeMillis()}_${index}"
         val js="""
@@ -870,7 +915,7 @@ class MainActivity : AppCompatActivity() {
                 log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
             }
             webView.evaluateJavascript("try{delete window[${JSONObject.quote(key)}];}catch(e){}",null)
-            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1,oasis) },900)
+            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1,oasis,allLists,listIndex) },900)
             else log("FARMLIST END processed=${coords.size}")
         }
     }
