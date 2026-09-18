@@ -697,27 +697,34 @@ class MainActivity : AppCompatActivity() {
 
             
 
-                const set=(e,v,doBlur=false)=>{
+                // Ketik koordinat satu karakter demi satu karakter. Travian memakai
+                // listener keyboard/input pada field koordinat, sehingga jangan langsung
+                // mengganti value menjadi seluruh koordinat sekaligus.
+                const typeByCharacter=async(e,v)=>{
                   const proto=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
                   const value=String(v);
                   try{ e.focus(); }catch(err){}
-                  if(proto&&proto.set) proto.set.call(e,value); else e.value=value;
+                  if(proto&&proto.set) proto.set.call(e,''); else e.value='';
                   e.dispatchEvent(new Event('input',{bubbles:true}));
-                  e.dispatchEvent(new Event('change',{bubbles:true}));
-                  e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'End',code:'End',keyCode:35,which:35}));
-                  if(doBlur){
-                    try{ e.blur(); }catch(err){}
-                    e.dispatchEvent(new FocusEvent('focusout',{bubbles:true}));
+                  for(const ch of value){
+                    const key=(ch==='-' ? 'Minus' : ch);
+                    const code=(ch==='-' ? 'Minus' : ('Digit'+ch));
+                    const keyCode=(ch==='-' ? 189 : (ch.charCodeAt(0)-48));
+                    e.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:ch,code:code,keyCode:keyCode,which:keyCode}));
+                    const current=String(e.value||'');
+                    if(proto&&proto.set) proto.set.call(e,current+ch); else e.value=current+ch;
+                    e.dispatchEvent(new Event('input',{bubbles:true}));
+                    e.dispatchEvent(new KeyboardEvent('keypress',{bubbles:true,key:ch,code:code,keyCode:keyCode,which:keyCode}));
+                    e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:ch,code:code,keyCode:keyCode,which:keyCode}));
+                    await sleep(120);
                   }
+                  e.dispatchEvent(new Event('change',{bubbles:true}));
                 };
 
-                // Isi X lalu Y. Jangan blur X/Y terlalu cepat; Travian perlu menerima
-                // event input/change terlebih dahulu. Setelah Y selesai, klik elemen
-                // di luar input agar handler Travian menjalankan lookup koordinat.
-                set(xi,${x},false);
-                set(yi,${y},true);
-                result.steps.push('X_filled=${x}');
-                result.steps.push('Y_filled=${y}');
+                await typeByCharacter(xi,${x});
+                result.steps.push('X_typed_char_by_char=${x}');
+                await typeByCharacter(yi,${y});
+                result.steps.push('Y_typed_char_by_char=${y}');
 
                 let save=null;
 
