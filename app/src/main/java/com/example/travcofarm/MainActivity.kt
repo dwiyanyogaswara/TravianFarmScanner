@@ -41,6 +41,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var farmListInput: EditText
     private lateinit var farmListSpinner: Spinner
     private val farmListNames = mutableListOf<String>()
+    private lateinit var unitInput: EditText
+    private lateinit var countInput: EditText
     private lateinit var logView: TextView
     private lateinit var webView: WebView
     private lateinit var travcoCount: TextView
@@ -77,6 +79,8 @@ class MainActivity : AppCompatActivity() {
         farmListSpinner = Spinner(this).apply {
             adapter = ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, farmListNames)
         }
+        unitInput = edit("Unit (default t1)", "t1")
+        countInput = edit("Jumlah unit (default 20)", "20")
 
         content.addView(serverInput)
         content.addView(xInput)
@@ -107,6 +111,8 @@ class MainActivity : AppCompatActivity() {
         // Hidden/unused text field is kept only for compatibility with older code.
         farmListInput.visibility = android.view.View.GONE
         content.addView(farmListInput)
+        content.addView(unitInput)
+        content.addView(countInput)
         content.addView(button("MASUKKAN FARMLIST DARI TRAVCO") { addTravcoToFarmList() })
         content.addView(button("MASUKKAN FARMLIST DARI OASIS") { addOasisToFarmList() })
 
@@ -588,32 +594,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun addFromDb(oasis:Boolean) {
         val list=selectedFarmListName()
-        if(list.isBlank()) {
-            log("FARMLIST ERROR: belum ada farmlist dari akun")
-            loadFarmLists()
-            return
-        }
-
+        val unit=unitInput.text.toString().trim().ifBlank { "t1" }
+        val count=countInput.text.toString().toIntOrNull()?.takeIf { it > 0 } ?: 20
+        if(list.isBlank()) { log("FARMLIST ERROR: belum ada farmlist dari akun"); loadFarmLists(); return }
         val rows=if(oasis) db.oasisCoords() else db.travcoCoords()
-        log("FARMLIST START source=${if(oasis) "OASIS" else "TRAVCO"} list='$list' targets=${rows.size}")
-        if(rows.isEmpty()) {
-            log("FARMLIST ERROR: database source empty")
-            return
+        if(oasis) {
+            log("FARMLIST START source=OASIS list='$list' targets=${rows.size} (troops tidak di-set)")
+        } else {
+            log("FARMLIST START source=TRAVCO list='$list' targets=${rows.size} unit=$unit count=$count")
         }
-
+        if(rows.isEmpty()) { log("FARMLIST ERROR: database source empty"); return }
         val server=normalizeServer(serverInput.text.toString())
         webView.loadUrl("$server/build.php?gid=16&tt=99")
         handler.postDelayed({
-            addFarmTargetsSequentially(list,rows,0)
+            addFarmTargetsSequentially(list, if(oasis) "" else unit, if(oasis) 0 else count, rows, 0, oasis)
         },4500)
     }
 
-    private fun addFarmTargetsSequentially(list:String,coords:List<Pair<Int,Int>>,index:Int) {
-        if(index>=coords.size) {
-            log("FARMLIST END completed=${coords.size}")
-            return
-        }
-
+    private fun addFarmTargetsSequentially(list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,oasis:Boolean=false) {
+        if(index>=coords.size) { log("FARMLIST END completed=${coords.size}"); return }
         val (x,y)=coords[index]
         val token = "travcoFarmResult_${System.currentTimeMillis()}_${index}"
         val js="""
@@ -624,23 +623,22 @@ class MainActivity : AppCompatActivity() {
             const clean=v=>(v||'').replace(/\\s+/g,' ').trim();
             const norm=v=>clean(v).replace(/\\(\\d+\\s+farms?\\)/ig,'').replace(/\\bdelete\\b/ig,'').trim().toLowerCase();
             const targetName=${JSONObject.quote(list)};
+            const troop=${JSONObject.quote(unit)};
+            const amount=${count};
             const result={x:${x},y:${y},url:location.href,steps:[]};
-
             (async function(){
               try{
                 if(!location.href.includes('gid=16')) result.steps.push('wrong_page');
 
-                // Cari Farmlist sesuai dropdown yang dipilih.
+                // Travian/RoG can render the farm-list panel in different containers.
                 let wrappers=[...document.querySelectorAll('#rallyPointFarmList .farmListWrapper')];
                 if(!wrappers.length) wrappers=[...document.querySelectorAll('.farmListWrapper')];
-
                 const wrapper=wrappers.find(w=>{
                   const n=w.querySelector('.farmListName .name')?.textContent ||
                           w.querySelector('.farmListName')?.textContent ||
                           w.getAttribute('data-list-name') || '';
                   return norm(n)===norm(targetName);
                 });
-
                 if(!wrapper){
                   result.error='Farm List not found: '+targetName;
                   result.available=wrappers.map(w=>clean(w.innerText).slice(0,150));
@@ -648,7 +646,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 result.listText=clean(wrapper.innerText).slice(0,250);
 
-                // Klik Add Target.
+                // First try the actual Add Target/Add Farm control used by Travian.
                 let add=wrapper.querySelector('td.addTarget a,td.addTarget button,.addTarget a,.addTarget button');
                 if(!add) add=wrapper.querySelector('[data-action*="add" i],[class*="addTarget" i] a,[class*="addTarget" i] button');
                 if(!add){
@@ -658,46 +656,46 @@ class MainActivity : AppCompatActivity() {
                     return /add\\s*(target|farm)|target\\s*add|farm\\s*list/i.test(txt);
                   });
                 }
-                if(!add){
-                  result.error='Add Target button not found';
-                  window[KEY]=result; return;
-                }
+                if(!add){ result.error='Add Target button not found'; window[KEY]=result; return; }
+                add.click(); result.steps.push('open_add_target');
 
-                add.click();
-                result.steps.push('open_add_target');
-
-                // Tunggu form Add Target muncul.
                 let form=null;
                 for(let i=0;i<80;i++){
                   form=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm');
                   if(form) break;
                   await sleep(150);
                 }
-
                 if(!form){
+                  // Fallback: any visible dialog/form containing coordinate inputs.
                   form=[...document.querySelectorAll('form')].find(f=>{
                     const xs=f.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]');
                     const ys=f.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]');
                     return xs&&ys;
                   });
                 }
-
                 if(!form){
                   result.error='Farm target form did not render';
                   result.body=clean(document.body?.innerText).slice(-1800);
                   window[KEY]=result; return;
                 }
 
-                // Masukkan koordinat X dan Y.
-                const xi=form.querySelector('.coordinateX input, input[name="x"]') ||
-                         [...form.querySelectorAll('input')].find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
-                const yi=form.querySelector('.coordinateY input, input[name="y"]') ||
-                         [...form.querySelectorAll('input')].find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
+                const inputs=[...form.querySelectorAll('input')];
+                //const xi=form.querySelector('input[name="x"],input[name="xCoord"],input[id*="xCoord" i]') ||
+                         //inputs.find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
+                //const yi=form.querySelector('input[name="y"],input[name="yCoord"],input[id*="yCoord" i]') ||
+                       //  inputs.find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
+               // if(!xi||!yi){ result.error='X/Y input not found'; window[KEY]=result; return; }
 
-                if(!xi||!yi){
-                  result.error='X/Y input not found';
-                  window[KEY]=result; return;
-                }
+
+
+// PERBAIKAN UTAMA: Selector spesifik untuk DOM dengan wrapper .coordinateX / .coordinateY
+            const xi=form.querySelector('.coordinateX input, input[name="x"]') ||
+                     [...form.querySelectorAll('input')].find(e=>/^(x|xcoord|coordx)$/i.test(e.name||e.id));
+            const yi=form.querySelector('.coordinateY input, input[name="y"]') ||
+                     [...form.querySelectorAll('input')].find(e=>/^(y|ycoord|coordy)$/i.test(e.name||e.id));
+            if(!xi||!yi){ result.error='X/Y input not found'; window[KEY]=result; return; }
+
+            
 
                 const set=(e,v)=>{
                   const proto=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
@@ -709,69 +707,108 @@ class MainActivity : AppCompatActivity() {
                   e.dispatchEvent(new Event('blur',{bubbles:true}));
                 };
 
+                // Isi X dan Y.
                 set(xi,${x});
                 set(yi,${y});
                 result.steps.push('X_filled=${x}');
                 result.steps.push('Y_filled=${y}');
 
-                // Klik "Set troops:" agar state/validasi target diproses.
-                const troopsHeader=form.querySelector('h4.troopsHeader') ||
-                                   document.querySelector('h4.troopsHeader');
-                if(!troopsHeader){
-                  result.error='troopsHeader not found';
-                  window[KEY]=result; return;
+                // Setelah koordinat diisi, Travian perlu membuka bagian "Set troops"
+                // agar target/village dari koordinat diproses dan tombol Save menjadi aktif.
+                // Untuk source OASIS tidak ada input jumlah pasukan sama sekali.
+                if(${oasis}) {
+                  const troopsHeader=form.querySelector('h4.troopsHeader');
+                  if(!troopsHeader){
+                    result.error='troopsHeader not found';
+                    window[KEY]=result; return;
+                  }
+                  try {
+                    troopsHeader.scrollIntoView({block:'center',inline:'center'});
+                  } catch(e) {}
+                  try {
+                    // Cukup satu native click. Jangan dispatch click + .click() sekaligus
+                    // karena itu membuat handler Travian terpanggil dua kali.
+                    troopsHeader.click();
+                    result.steps.push('troopsHeader_clicked');
+                  } catch(e) {
+                    result.error='troopsHeader click failed: '+String(e&&e.message||e);
+                    window[KEY]=result; return;
+                  }
+
+                  // Setelah header diklik, Travian/React dapat mengganti node form.
+                  // Karena itu form dan tombol Save harus dicari ulang dari document
+                  // pada setiap polling, bukan memakai referensi form lama.
+                  let enabled=false;
+                  for(let i=0;i<60;i++){
+                    const currentForm=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm') ||
+                      [...document.querySelectorAll('form')].find(f=>{
+                        const xs=f.querySelector('input[name="x"]');
+                        const ys=f.querySelector('input[name="y"]');
+                        return xs&&ys;
+                      });
+                    if(currentForm) form=currentForm;
+                    save=form?.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green[type="submit"]') ||
+                         form?.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green') ||
+                         form?.querySelector('button.save[type="submit"]');
+                    if(save && !save.disabled){ enabled=true; break; }
+                    await sleep(250);
+                  }
+                  result.steps.push('wait_village_and_save=15000ms_max');
+                  if(!enabled){
+                    result.error='Save button still disabled after troopsHeader click and village lookup wait';
+                    result.formText=clean(form?.innerText).slice(0,2200);
+                    window[KEY]=result; return;
+                  }
+                } else {
+                  // Jalur lama untuk Travco tetap boleh mengisi troops.
+                  let troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
+                  if(!troopInput){
+                    troopInput=[...form.querySelectorAll('input.unitAmount,input[type="text"],input[type="number"]')]
+                      .find(e=>(e.name||'').toLowerCase()===troop.toLowerCase());
+                  }
+                  if(troopInput){
+                    set(troopInput,amount);
+                    result.steps.push('troop_filled');
+                  } else result.steps.push('troop_input_not_found');
+
+                  await sleep(300);
                 }
 
-                try {
-                  troopsHeader.scrollIntoView({block:'center',inline:'center'});
-                } catch(e) {}
-
-                troopsHeader.click();
-                result.steps.push('troopsHeader_clicked');
-
-                // Tunggu sampai tombol Save aktif setelah koordinat tervalidasi.
-                let save=null;
-                for(let i=0;i<40;i++){
+                for(let i=0;i<20;i++){
                   save=form.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green[type="submit"]') ||
                        form.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green') ||
                        form.querySelector('button.save[type="submit"]');
-                  if(save && !save.disabled) break;
+                  if(save){
+                    result.steps.push('save_found_disabled='+!!save.disabled);
+                    if(!save.disabled) break;
+                  }
                   await sleep(250);
                 }
-
                 if(!save){
                   result.error='Save button not found';
                   result.formText=clean(form.innerText).slice(0,1600);
                   window[KEY]=result; return;
                 }
-
                 if(save.disabled){
-                  result.error='Save button still disabled after troopsHeader click';
+                  result.error='Save button still disabled after village lookup';
                   result.formText=clean(form.innerText).slice(0,1600);
                   window[KEY]=result; return;
                 }
-
                 try {
                   save.scrollIntoView({block:'center',inline:'center'});
                 } catch(e) {}
-
                 await sleep(200);
                 save.click();
                 result.steps.push('save_clicked');
 
-                // Tunggu form hilang / target masuk ke Farmlist.
+                // Wait for the modal/form to disappear OR the target to appear in the list.
                 for(let i=0;i<80;i++){
                   const still=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm');
                   const body=clean(wrapper.innerText);
                   const coordSeen=body.includes('(${x}|${y})') || (body.includes('${x}') && body.includes('${y}'));
-                  if(!still || coordSeen){
-                    result.ok=true;
-                    window[KEY]=result;
-                    return;
-                  }
+                  if(!still || coordSeen){ result.ok=true; window[KEY]=result; return; }
                   await sleep(150);
                 }
-
                 result.error='Save clicked but form remained open';
                 window[KEY]=result;
               }catch(e){
@@ -783,20 +820,22 @@ class MainActivity : AppCompatActivity() {
           })();
         """.trimIndent()
 
+        // evaluateJavascript() does NOT wait for a JavaScript Promise. The old code
+        // evaluated an async IIFE directly, so Android received the Promise/empty
+        // result and the log showed steps=[] even though the JS had not finished.
         webView.evaluateJavascript(js) { keyResult ->
             val key=unquoteJs(keyResult).ifBlank { token }
-            pollFarmListResult(key,list,coords,index,0)
+            pollFarmListResult(key, list,unit,count,coords,index,0,oasis)
         }
     }
 
-    private fun pollFarmListResult(key:String,list:String,coords:List<Pair<Int,Int>>,index:Int,attempt:Int) {
+    private fun pollFarmListResult(key:String,list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,attempt:Int,oasis:Boolean) {
         webView.evaluateJavascript("window[${JSONObject.quote(key)}] ? JSON.stringify(window[${JSONObject.quote(key)}]) : ''") { result ->
             val raw=unquoteJs(result)
             if(raw.isBlank() && attempt < 100) {
-                handler.postDelayed({ pollFarmListResult(key,list,coords,index,attempt+1) },150)
+                handler.postDelayed({ pollFarmListResult(key,list,unit,count,coords,index,attempt+1) },150)
                 return@evaluateJavascript
             }
-
             val (x,y)=coords[index]
             try {
                 val o=JSONObject(raw)
@@ -806,13 +845,9 @@ class MainActivity : AppCompatActivity() {
             } catch(e:Exception) {
                 log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
             }
-
             webView.evaluateJavascript("try{delete window[${JSONObject.quote(key)}];}catch(e){}",null)
-            if(index+1<coords.size) {
-                handler.postDelayed({ addFarmTargetsSequentially(list,coords,index+1) },900)
-            } else {
-                log("FARMLIST END processed=${coords.size}")
-            }
+            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1,oasis) },900)
+            else log("FARMLIST END processed=${coords.size}")
         }
     }
 
