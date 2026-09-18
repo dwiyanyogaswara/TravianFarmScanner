@@ -637,22 +637,30 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl("$server/build.php?gid=16&tt=99")
         handler.postDelayed({
             val firstEnd=minOf(100, rows.size)
-            addFarmTargetsSequentially(lists[0], if(oasis) "" else unit, if(oasis) 0 else count, rows.subList(0, firstEnd), 0, oasis, lists, 0)
+            log("FARMLIST BATCH 1/${lists.size}: '${lists[0]}' targets 1-$firstEnd")
+            addFarmTargetsSequentially(lists[0], if(oasis) "" else unit, if(oasis) 0 else count, rows.subList(0, firstEnd), 0, oasis, lists, 0, rows)
         },4500)
     }
 
-    private fun addFarmTargetsSequentially(list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,oasis:Boolean=false,allLists:List<String> = listOf(list),listIndex:Int=0) {
+    private fun addFarmTargetsSequentially(list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,oasis:Boolean=false,allLists:List<String> = listOf(list),listIndex:Int=0,allRows:List<Pair<Int,Int>> = coords) {
         if(index>=coords.size) {
             val completedBefore = listIndex * 100 + coords.size
             if(completedBefore < 1) { log("FARMLIST END completed=0"); return }
             val nextStart = completedBefore
             if(nextStart < (if(oasis) db.oasisCoords().size else db.travcoCoords().size)) {
-                val allRows = if(oasis) db.oasisCoords() else db.travcoCoords()
                 val nextListIndex = listIndex + 1
                 if(nextListIndex >= allLists.size) { log("FARMLIST ERROR: farmlist tidak cukup untuk sisa target"); return }
                 val nextEnd=minOf(nextStart + 100, allRows.size)
                 log("FARMLIST NEXT: '${allLists[nextListIndex]}' targets ${nextStart+1}-$nextEnd")
-                addFarmTargetsSequentially(allLists[nextListIndex],unit,count,allRows.subList(nextStart,nextEnd),0,oasis,allLists,nextListIndex)
+                log("FARMLIST BATCH ${nextListIndex+1}/${allLists.size}: '${allLists[nextListIndex]}' targets ${nextStart+1}-$nextEnd")
+                // Reload the Farmlist page before changing to the next selected list.
+                // This keeps the same proven Add Target -> X -> Y -> unitAmount -> Save flow.
+                val server=normalizeServer(serverInput.text.toString())
+                pageReady=false
+                webView.loadUrl("$server/build.php?gid=16&tt=99")
+                handler.postDelayed({
+                    addFarmTargetsSequentially(allLists[nextListIndex],unit,count,allRows.subList(nextStart,nextEnd),0,oasis,allLists,nextListIndex,allRows)
+                },3500)
             } else {
                 log("FARMLIST END completed=$completedBefore")
             }
@@ -894,15 +902,15 @@ class MainActivity : AppCompatActivity() {
         // result and the log showed steps=[] even though the JS had not finished.
         webView.evaluateJavascript(js) { keyResult ->
             val key=unquoteJs(keyResult).ifBlank { token }
-            pollFarmListResult(key, list,unit,count,coords,index,0,oasis,allLists,listIndex)
+            pollFarmListResult(key, list,unit,count,coords,index,0,oasis)
         }
     }
 
-    private fun pollFarmListResult(key:String,list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,attempt:Int,oasis:Boolean,allLists:List<String>,listIndex:Int) {
+    private fun pollFarmListResult(key:String,list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,attempt:Int,oasis:Boolean) {
         webView.evaluateJavascript("window[${JSONObject.quote(key)}] ? JSON.stringify(window[${JSONObject.quote(key)}]) : ''") { result ->
             val raw=unquoteJs(result)
             if(raw.isBlank() && attempt < 100) {
-                handler.postDelayed({ pollFarmListResult(key,list,unit,count,coords,index,attempt+1,oasis,allLists,listIndex) },150)
+                handler.postDelayed({ pollFarmListResult(key,list,unit,count,coords,index,attempt+1,oasis) },150)
                 return@evaluateJavascript
             }
             val (x,y)=coords[index]
@@ -915,7 +923,7 @@ class MainActivity : AppCompatActivity() {
                 log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
             }
             webView.evaluateJavascript("try{delete window[${JSONObject.quote(key)}];}catch(e){}",null)
-            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1,oasis,allLists,listIndex) },900)
+            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1,oasis,allLists,listIndex,allRows) },900)
             else log("FARMLIST END processed=${coords.size}")
         }
     }
