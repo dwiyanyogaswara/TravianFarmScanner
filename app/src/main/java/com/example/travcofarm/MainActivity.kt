@@ -833,7 +833,7 @@ class MainActivity : AppCompatActivity() {
         webView.evaluateJavascript("window[${JSONObject.quote(key)}] ? JSON.stringify(window[${JSONObject.quote(key)}]) : ''") { result ->
             val raw=unquoteJs(result)
             if(raw.isBlank() && attempt < 100) {
-                handler.postDelayed({ pollFarmListResult(key,list,unit,count,coords,index,attempt+1) },150)
+                handler.postDelayed({ pollFarmListResult(key,list,unit,count,coords,index,attempt+1,oasis) },150)
                 return@evaluateJavascript
             }
             val (x,y)=coords[index]
