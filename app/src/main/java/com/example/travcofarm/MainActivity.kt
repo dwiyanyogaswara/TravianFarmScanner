@@ -697,70 +697,87 @@ class MainActivity : AppCompatActivity() {
 
             
 
-                const set=(e,v)=>{
+                const set=(e,v,doBlur=false)=>{
                   const proto=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
                   const value=String(v);
+                  try{ e.focus(); }catch(err){}
                   if(proto&&proto.set) proto.set.call(e,value); else e.value=value;
                   e.dispatchEvent(new Event('input',{bubbles:true}));
                   e.dispatchEvent(new Event('change',{bubbles:true}));
-                  e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'End'}));
-                  e.dispatchEvent(new Event('blur',{bubbles:true}));
+                  e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'End',code:'End',keyCode:35,which:35}));
+                  if(doBlur){
+                    try{ e.blur(); }catch(err){}
+                    e.dispatchEvent(new FocusEvent('focusout',{bubbles:true}));
+                  }
                 };
 
-                // Isi X dan Y.
-                set(xi,${x});
-                set(yi,${y});
+                // Isi X lalu Y. Jangan blur X/Y terlalu cepat; Travian perlu menerima
+                // event input/change terlebih dahulu. Setelah Y selesai, klik elemen
+                // di luar input agar handler Travian menjalankan lookup koordinat.
+                set(xi,${x},false);
+                set(yi,${y},true);
                 result.steps.push('X_filled=${x}');
                 result.steps.push('Y_filled=${y}');
 
-                // Setelah koordinat diisi, Travian perlu membuka bagian "Set troops"
-                // agar target/village dari koordinat diproses dan tombol Save menjadi aktif.
-                // Untuk source OASIS tidak ada input jumlah pasukan sama sekali.
+                let save=null;
+
+                // Untuk OASIS: setelah X/Y diisi, pindahkan focus ke input unitAmount.
+                // Perpindahan focus ini membuat field koordinat kehilangan focus sehingga
+                // Travian menjalankan lookup target/village secara asynchronous.
+                // Tunggu 2 detik agar hasil lookup masuk dan tombol Save menjadi aktif.
                 if(${oasis}) {
-                  const troopsHeader=form.querySelector('h4.troopsHeader');
-                  if(!troopsHeader){
-                    result.error='troopsHeader not found';
+                  let currentForm=form;
+                  const troopFocus=currentForm.querySelector('input.unitAmount') ||
+                    currentForm.querySelector('input.unitAmount[name="t1"]') ||
+                    document.querySelector('input.unitAmount[name="t1"]') ||
+                    document.querySelector('input.unitAmount');
+                  if(!troopFocus){
+                    result.error='unitAmount input not found';
                     window[KEY]=result; return;
                   }
                   try {
-                    troopsHeader.scrollIntoView({block:'center',inline:'center'});
-                  } catch(e) {}
-                  try {
-                    // Cukup satu native click. Jangan dispatch click + .click() sekaligus
-                    // karena itu membuat handler Travian terpanggil dua kali.
-                    troopsHeader.click();
-                    result.steps.push('troopsHeader_clicked');
+                    troopFocus.scrollIntoView({block:'center',inline:'center'});
+                    troopFocus.focus();
+                    result.steps.push('unitAmount_focused');
                   } catch(e) {
-                    result.error='troopsHeader click failed: '+String(e&&e.message||e);
+                    result.error='unitAmount focus failed: '+String(e&&e.message||e);
                     window[KEY]=result; return;
                   }
 
-                  // Setelah header diklik, Travian/React dapat mengganti node form.
-                  // Karena itu form dan tombol Save harus dicari ulang dari document
-                  // pada setiap polling, bukan memakai referensi form lama.
-                  let enabled=false;
-                  for(let i=0;i<60;i++){
-                    const currentForm=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm') ||
-                      [...document.querySelectorAll('form')].find(f=>{
-                        const xs=f.querySelector('input[name="x"]');
-                        const ys=f.querySelector('input[name="y"]');
-                        return xs&&ys;
-                      });
-                    if(currentForm) form=currentForm;
+                  await sleep(2000);
+                  result.steps.push('unitAmount_focus_wait=2000ms');
+
+                  // React/Travian dapat mengganti form setelah lookup koordinat.
+                  // Ambil kembali form dan tombol Save terbaru sebelum klik.
+                  currentForm=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm') ||
+                    [...document.querySelectorAll('form')].find(f=>{
+                      const xs=f.querySelector('input[name="x"]');
+                      const ys=f.querySelector('input[name="y"]');
+                      return xs&&ys;
+                    }) || currentForm;
+                  form=currentForm;
+
+                  for(let i=0;i<20;i++){
                     save=form?.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green[type="submit"]') ||
                          form?.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green') ||
                          form?.querySelector('button.save[type="submit"]');
-                    if(save && !save.disabled){ enabled=true; break; }
+                    if(save && !save.disabled) break;
                     await sleep(250);
                   }
-                  result.steps.push('wait_village_and_save=15000ms_max');
-                  if(!enabled){
-                    result.error='Save button still disabled after troopsHeader click and village lookup wait';
+                  if(!save){
+                    result.error='Save button not found after unitAmount focus';
+                    result.formText=clean(form?.innerText).slice(0,2200);
+                    window[KEY]=result; return;
+                  }
+                  result.steps.push('save_found_disabled='+!!save.disabled);
+                  if(save.disabled){
+                    result.error='Save button still disabled after unitAmount focus wait';
                     result.formText=clean(form?.innerText).slice(0,2200);
                     window[KEY]=result; return;
                   }
                 } else {
                   // Jalur lama untuk Travco tetap boleh mengisi troops.
+
                   let troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
                   if(!troopInput){
                     troopInput=[...form.querySelectorAll('input.unitAmount,input[type="text"],input[type="number"]')]
