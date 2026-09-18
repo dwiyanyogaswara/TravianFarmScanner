@@ -894,15 +894,15 @@ class MainActivity : AppCompatActivity() {
         // result and the log showed steps=[] even though the JS had not finished.
         webView.evaluateJavascript(js) { keyResult ->
             val key=unquoteJs(keyResult).ifBlank { token }
-            pollFarmListResult(key, list,unit,count,coords,index,0,oasis)
+            pollFarmListResult(key, list,unit,count,coords,index,0,oasis,allLists,listIndex)
         }
     }
 
-    private fun pollFarmListResult(key:String,list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,attempt:Int,oasis:Boolean) {
+    private fun pollFarmListResult(key:String,list:String,unit:String,count:Int,coords:List<Pair<Int,Int>>,index:Int,attempt:Int,oasis:Boolean,allLists:List<String>,listIndex:Int) {
         webView.evaluateJavascript("window[${JSONObject.quote(key)}] ? JSON.stringify(window[${JSONObject.quote(key)}]) : ''") { result ->
             val raw=unquoteJs(result)
             if(raw.isBlank() && attempt < 100) {
-                handler.postDelayed({ pollFarmListResult(key,list,unit,count,coords,index,attempt+1,oasis) },150)
+                handler.postDelayed({ pollFarmListResult(key,list,unit,count,coords,index,attempt+1,oasis,allLists,listIndex) },150)
                 return@evaluateJavascript
             }
             val (x,y)=coords[index]
