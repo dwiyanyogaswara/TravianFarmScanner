@@ -659,7 +659,7 @@ class MainActivity : AppCompatActivity() {
                 pageReady=false
                 webView.loadUrl("$server/build.php?gid=16&tt=99")
                 handler.postDelayed({
-                    (allLists[nextListIndex],unit,count,allRows.subList(nextStart,nextEnd),0,oasis,allLists,nextListIndex,allRows)
+                    addFarmTargetsSequentially(allLists[nextListIndex],unit,count,allRows.subList(nextStart,nextEnd),0,oasis,allLists,nextListIndex,allRows)
                 },3500)
             } else {
                 log("FARMLIST END completed=$completedBefore")
@@ -925,7 +925,7 @@ class MainActivity : AppCompatActivity() {
                 log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
             }
             webView.evaluateJavascript("try{delete window[${JSONObject.quote(key)}];}catch(e){}",null)
-            if(index+1<coords.size) handler.postDelayed({ (list,unit,count,coords,index+1,oasis,allLists,listIndex,allRows) },900)
+            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1,oasis,allLists,listIndex,allRows) },900)
             else log("FARMLIST END processed=${coords.size}")
         }
     }
