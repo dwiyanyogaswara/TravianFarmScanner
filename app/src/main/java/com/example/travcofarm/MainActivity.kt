@@ -29,10 +29,6 @@ import android.widget.TableLayout
 import android.widget.TableRow
 import android.text.Editable
 import android.text.TextWatcher
-import android.widget.TableLayout
-import android.widget.TableRow
-import android.text.Editable
-import android.text.TextWatcher
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
 import org.json.JSONObject
