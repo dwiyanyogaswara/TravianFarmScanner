@@ -24,6 +24,10 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.CheckBox
+import android.widget.TableLayout
+import android.widget.TableRow
+import android.text.Editable
+import android.text.TextWatcher
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
 import org.json.JSONObject
@@ -120,7 +124,7 @@ class MainActivity : AppCompatActivity() {
 
         content.addView(label("LOG", 18f))
         logView = TextView(this).apply {
-            setTextColor(Color.LTGRAY)
+            setTextColor(Color.WHITE)
             textSize = 12f
             setPadding(8, 4, 8, 12)
             typeface = android.graphics.Typeface.MONOSPACE
@@ -486,41 +490,179 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showDbOverview() {
-        val travco = db.travcoOverview(80)
-        val oasis = db.oasisOverview(120)
+        val searchInput = EditText(this).apply {
+            hint = "Cari koordinat, nama, akun, tipe, owner, alliance..."
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.LTGRAY)
+            textSize = 14f
+            singleLine = true
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setBackgroundColor(Color.rgb(65, 65, 65))
+        }
+
+        val resultInfo = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setPadding(0, dp(8), 0, dp(8))
+        }
+
+        val tableContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        fun cell(text: String, header: Boolean = false): TextView {
+            return TextView(this).apply {
+                this.text = text
+                setTextColor(Color.WHITE)
+                textSize = if (header) 12f else 11f
+                typeface = if (header) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+                setPadding(dp(8), dp(7), dp(8), dp(7))
+                setBackgroundColor(if (header) Color.rgb(55, 75, 95) else Color.rgb(48, 48, 48))
+                isSingleLine = true
+            }
+        }
+
+        fun buildTable(
+            headers: List<String>,
+            rows: List<List<String>>
+        ): HorizontalScrollView {
+            val table = TableLayout(this).apply {
+                isStretchAllColumns = false
+                isShrinkAllColumns = false
+                setBackgroundColor(Color.rgb(35, 35, 35))
+            }
+
+            val headerRow = TableRow(this).apply {
+                setBackgroundColor(Color.rgb(55, 75, 95))
+            }
+            headers.forEach { h ->
+                headerRow.addView(cell(h, true), TableRow.LayoutParams().apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                })
+            }
+            table.addView(headerRow)
+
+            rows.forEachIndexed { index, row ->
+                val tr = TableRow(this).apply {
+                    setBackgroundColor(if (index % 2 == 0) Color.rgb(48, 48, 48) else Color.rgb(58, 58, 58))
+                }
+                row.forEach { value ->
+                    tr.addView(cell(value), TableRow.LayoutParams().apply {
+                        setMargins(dp(1), dp(1), dp(1), dp(1))
+                    })
+                }
+                table.addView(tr)
+            }
+
+            return HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = true
+                addView(table)
+            }
+        }
+
+        fun renderTables(query: String) {
+            val q = query.trim()
+            val travco = db.travcoOverviewRows(q, 1000)
+            val centerX = xInput.text.toString().trim().toIntOrNull() ?: 0
+            val centerY = yInput.text.toString().trim().toIntOrNull() ?: 0
+            val oasis = db.oasisOverviewRows(q, centerX, centerY, 1000)
+
+            tableContainer.removeAllViews()
+
+            tableContainer.addView(TextView(this).apply {
+                text = "TRAVCO DB — ${travco.size} hasil (urut Distance terendah)"
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setPadding(0, dp(8), 0, dp(6))
+            })
+
+            val travcoRows = travco.map {
+                listOf(
+                    "(${it.x}|${it.y})",
+                    it.village,
+                    it.account,
+                    it.population.toString(),
+                    String.format(java.util.Locale.US, "%.2f", it.distance)
+                )
+            }
+            tableContainer.addView(
+                buildTable(
+                    listOf("Koordinat", "Village", "Account", "Pop", "Distance"),
+                    travcoRows
+                ),
+                LinearLayout.LayoutParams(-1, dp(260)).apply { bottomMargin = dp(12) }
+            )
+
+            tableContainer.addView(TextView(this).apply {
+                text = "OASIS DB — ${oasis.size} hasil (urut Distance terendah)"
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setPadding(0, dp(8), 0, dp(6))
+            })
+
+            val oasisRows = oasis.map {
+                listOf(
+                    "(${it.x}|${it.y})",
+                    it.type,
+                    if (it.occupied) "OCCUPIED" else "FREE",
+                    it.animals,
+                    it.owner,
+                    it.alliance,
+                    String.format(java.util.Locale.US, "%.2f", it.distance)
+                )
+            }
+            tableContainer.addView(
+                buildTable(
+                    listOf("Koordinat", "Type", "Status", "Animals", "Owner", "Alliance", "Distance"),
+                    oasisRows
+                ),
+                LinearLayout.LayoutParams(-1, dp(300))
+            )
+
+            resultInfo.text = "Pencarian: ${if (q.isBlank()) "semua data" else "\"$q\""}  •  TRAVCO ${travco.size}  •  OASIS ${oasis.size}"
+        }
+
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(4), dp(12), dp(8))
+            setBackgroundColor(Color.rgb(38, 38, 38))
         }
-        body.addView(TextView(this).apply {
-            setTextColor(Color.DKGRAY)
-            textSize = 15f
-            text = "TRAVCO: ${db.travcoCount()} rows\nOASIS: ${db.oasisCount()} rows\n\n"
+
+        body.addView(searchInput, LinearLayout.LayoutParams(-1, dp(48)))
+        body.addView(resultInfo)
+
+        val scroll = ScrollView(this).apply {
+            addView(tableContainer)
+        }
+        body.addView(scroll, LinearLayout.LayoutParams(-1, dp(570)))
+
+        renderTables("")
+
+        searchInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                renderTables(s?.toString() ?: "")
+            }
+            override fun afterTextChanged(s: Editable?) {}
         })
-        body.addView(TextView(this).apply {
-            setTextColor(Color.DKGRAY); textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-            text = "TRAVCO DB (max 80)"
-        })
-        body.addView(TextView(this).apply {
-            setTextColor(Color.DKGRAY); textSize = 12f; typeface = android.graphics.Typeface.MONOSPACE
-            text = if (travco.isBlank()) "(empty)" else travco
-            setTextIsSelectable(true)
-        })
-        body.addView(TextView(this).apply {
-            setTextColor(Color.DKGRAY); textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-            text = "\nOASIS DB (max 120)"
-        })
-        body.addView(TextView(this).apply {
-            setTextColor(Color.DKGRAY); textSize = 12f; typeface = android.graphics.Typeface.MONOSPACE
-            text = if (oasis.isBlank()) "(empty)" else oasis
-            setTextIsSelectable(true)
-        })
-        val scroll = ScrollView(this).apply { addView(body) }
-        AlertDialog.Builder(this)
+
+        val dialog = AlertDialog.Builder(this)
             .setTitle("DATABASE OVERVIEW")
-            .setView(scroll)
+            .setView(body)
             .setPositiveButton("CLOSE", null)
-            .show()
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.window?.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(Color.rgb(38, 38, 38))
+            )
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.WHITE)
+            dialog.findViewById<TextView>(android.R.id.alertTitle)?.setTextColor(Color.WHITE)
+        }
+        dialog.show()
+
         log("DB OVERVIEW: travco=${db.travcoCount()} oasis=${db.oasisCount()} freeOasis=${db.oasisUnoccupiedCount()} occupiedOasis=${db.oasisOccupiedCount()}")
     }
 
@@ -985,28 +1127,75 @@ class MainActivity : AppCompatActivity() {
         fun oasisCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis",null).use{it.moveToFirst();it.getInt(0)}
         fun oasisUnoccupiedCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis WHERE occupied=0",null).use{it.moveToFirst();it.getInt(0)}
         fun oasisOccupiedCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis WHERE occupied=1",null).use{it.moveToFirst();it.getInt(0)}
-        fun travcoOverview(limit:Int):String = readableDatabase.rawQuery("SELECT x,y,village,account,population,distance FROM travco ORDER BY distance ASC LIMIT ?", arrayOf(limit.toString())).use { c ->
-            val b=StringBuilder()
-            while(c.moveToNext()) {
-                b.append("(").append(c.getInt(0)).append("|").append(c.getInt(1)).append(") ")
-                    .append(c.getString(2) ?: "").append(" | ")
-                    .append(c.getString(3) ?: "").append(" | pop=")
-                    .append(c.getInt(4)).append(" | dist=").append(c.getDouble(5)).append("\n")
+        data class TravcoOverviewRow(
+            val x:Int, val y:Int, val village:String, val account:String,
+            val population:Int, val distance:Double
+        )
+        data class OasisOverviewRow(
+            val x:Int, val y:Int, val type:String, val animals:String,
+            val occupied:Boolean, val owner:String, val alliance:String, val distance:Double
+        )
+
+        fun travcoOverviewRows(search:String = "", limit:Int = 1000):List<TravcoOverviewRow> {
+            val q = "%${search.trim()}%"
+            val sql = """
+                SELECT x,y,village,account,population,distance
+                FROM travco
+                WHERE ? = '' OR
+                      CAST(x AS TEXT) LIKE ? OR CAST(y AS TEXT) LIKE ? OR
+                      village LIKE ? OR account LIKE ? OR
+                      CAST(population AS TEXT) LIKE ? OR CAST(distance AS TEXT) LIKE ?
+                ORDER BY distance ASC
+                LIMIT ?
+            """.trimIndent()
+            return readableDatabase.rawQuery(
+                sql,
+                arrayOf(search.trim(), q, q, q, q, q, q, limit.toString())
+            ).use { c ->
+                buildList {
+                    while(c.moveToNext()) {
+                        add(TravcoOverviewRow(
+                            c.getInt(0), c.getInt(1), c.getString(2) ?: "",
+                            c.getString(3) ?: "", c.getInt(4), c.getDouble(5)
+                        ))
+                    }
+                }
             }
-            b.toString()
         }
-        fun oasisOverview(limit:Int):String = readableDatabase.rawQuery("SELECT x,y,oasisType,occupied,animals,owner,alliance FROM oasis ORDER BY y,x LIMIT ?", arrayOf(limit.toString())).use { c ->
-            val b=StringBuilder()
-            while(c.moveToNext()) {
-                b.append("(").append(c.getInt(0)).append("|").append(c.getInt(1)).append(") ")
-                    .append(c.getString(2) ?: "").append(" | ")
-                    .append(if(c.getInt(3)!=0) "OCC" else "FREE")
-                    .append(" | ").append(c.getString(4) ?: "")
-                if (!c.getString(5).orEmpty().isBlank()) b.append(" | owner=").append(c.getString(5))
-                if (!c.getString(6).orEmpty().isBlank()) b.append(" | alliance=").append(c.getString(6))
-                b.append("\n")
+
+        fun oasisOverviewRows(search:String = "", centerX:Int = 0, centerY:Int = 0, limit:Int = 1000):List<OasisOverviewRow> {
+            val q = "%${search.trim()}%"
+            val rows = readableDatabase.rawQuery("""
+                SELECT x,y,oasisType,occupied,animals,owner,alliance
+                FROM oasis
+                WHERE ? = '' OR
+                      CAST(x AS TEXT) LIKE ? OR CAST(y AS TEXT) LIKE ? OR
+                      oasisType LIKE ? OR animals LIKE ? OR
+                      owner LIKE ? OR alliance LIKE ?
+            """.trimIndent(), arrayOf(search.trim(), q, q, q, q, q, q)).use { c ->
+                buildList {
+                    while(c.moveToNext()) {
+                        val x = c.getInt(0)
+                        val y = c.getInt(1)
+                        val dx = (x - centerX).toDouble()
+                        val dy = (y - centerY).toDouble()
+                        add(OasisOverviewRow(
+                            x, y, c.getString(2) ?: "", c.getInt(3) != 0,
+                            c.getString(4) ?: "", c.getString(5) ?: "",
+                            c.getString(6) ?: "", sqrt(dx * dx + dy * dy)
+                        ))
+                    }
+                }
             }
-            b.toString()
+            return rows.sortedBy { it.distance }.take(limit)
+        }
+
+        fun travcoOverview(limit:Int):String = travcoOverviewRows("", limit).joinToString("\n") {
+            "(${it.x}|${it.y}) ${it.village} | ${it.account} | pop=${it.population} | dist=${it.distance}"
+        }
+
+        fun oasisOverview(limit:Int):String = oasisOverviewRows("", 0, 0, limit).joinToString("\n") {
+            "(${it.x}|${it.y}) ${it.type} | ${if(it.occupied) "OCC" else "FREE"} | ${it.animals} | owner=${it.owner} | alliance=${it.alliance}"
         }
         fun travcoCoords(): List<Pair<Int, Int>> = coords("SELECT x,y FROM travco ORDER BY distance ASC")
         fun oasisCoords(): List<Pair<Int, Int>> = coords("SELECT x,y FROM oasis WHERE occupied=0 ORDER BY id")
