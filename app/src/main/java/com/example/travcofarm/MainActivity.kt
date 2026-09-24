@@ -24,6 +24,11 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.CheckBox
+import android.widget.HorizontalScrollView
+import android.widget.TableLayout
+import android.widget.TableRow
+import android.text.Editable
+import android.text.TextWatcher
 import android.widget.TableLayout
 import android.widget.TableRow
 import android.text.Editable
@@ -495,7 +500,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
             setHintTextColor(Color.LTGRAY)
             textSize = 14f
-            singleLine = true
+            setSingleLine(true)
             setPadding(dp(12), dp(8), dp(12), dp(8))
             setBackgroundColor(Color.rgb(65, 65, 65))
         }
@@ -659,7 +664,6 @@ class MainActivity : AppCompatActivity() {
                 android.graphics.drawable.ColorDrawable(Color.rgb(38, 38, 38))
             )
             dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.WHITE)
-            dialog.findViewById<TextView>(android.R.id.alertTitle)?.setTextColor(Color.WHITE)
         }
         dialog.show()
 
@@ -1180,8 +1184,8 @@ class MainActivity : AppCompatActivity() {
                         val dx = (x - centerX).toDouble()
                         val dy = (y - centerY).toDouble()
                         add(OasisOverviewRow(
-                            x, y, c.getString(2) ?: "", c.getInt(3) != 0,
-                            c.getString(4) ?: "", c.getString(5) ?: "",
+                            x, y, c.getString(2) ?: "", c.getString(4) ?: "",
+                            c.getInt(3) != 0, c.getString(5) ?: "",
                             c.getString(6) ?: "", sqrt(dx * dx + dy * dy)
                         ))
                     }
