@@ -1106,8 +1106,14 @@ class MainActivity : AppCompatActivity() {
                       .find(e=>(e.name||'').toLowerCase()===troop.toLowerCase());
                   }
                   if(troopInput){
-                    set(troopInput,amount);
-                    result.steps.push('troop_filled');
+                    // Gunakan native value setter + event input/change, sama seperti
+                    // mekanisme pengisian field yang dipakai pada flow Oasis.
+                    const proto=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+                    if(proto&&proto.set) proto.set.call(troopInput,String(amount));
+                    else troopInput.value=String(amount);
+                    troopInput.dispatchEvent(new Event('input',{bubbles:true}));
+                    troopInput.dispatchEvent(new Event('change',{bubbles:true}));
+                    result.steps.push('troop_filled='+amount);
                   } else result.steps.push('troop_input_not_found');
 
                   await sleep(300);
@@ -1193,21 +1199,16 @@ class MainActivity : AppCompatActivity() {
                 return@evaluateJavascript
             }
             val (x,y)=coords[index]
-            val o = try {
-                JSONObject(raw)
-            } catch(e:Exception) {
-                log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
-                null
-            }
-
-            if (o != null) {
+            try {
+                val o=JSONObject(raw)
                 log("FARMLIST TARGET ${index+1}/${coords.size} (${x}|${y}) RESULT: ok=${o.optBoolean("ok")} steps=${o.optJSONArray("steps")?.toString() ?: "[]"}")
                 if(o.has("error")) log("FARMLIST TARGET ERROR (${x}|${y}): ${o.optString("error").take(1400)}")
                 if(o.has("available")) log("FARMLIST AVAILABLE: ${o.optJSONArray("available")?.toString()?.take(1200)}")
+            } catch(e:Exception) {
+                log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
             }
-
             webView.evaluateJavascript("try{delete window[${JSONObject.quote(key)}];}catch(e){}",null)
-            val ok = o?.optBoolean("ok") == true
+            val ok = try { o.optBoolean("ok") } catch(_:Exception) { false }
             if(!ok) {
                 log("FARMLIST STOP: target (${x}|${y}) belum berhasil di-save, popup berikutnya tidak dibuka")
                 return@evaluateJavascript
