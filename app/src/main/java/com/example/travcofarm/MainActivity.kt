@@ -1199,16 +1199,21 @@ class MainActivity : AppCompatActivity() {
                 return@evaluateJavascript
             }
             val (x,y)=coords[index]
-            try {
-                val o=JSONObject(raw)
+            val o = try {
+                JSONObject(raw)
+            } catch(e:Exception) {
+                log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
+                null
+            }
+
+            if(o != null) {
                 log("FARMLIST TARGET ${index+1}/${coords.size} (${x}|${y}) RESULT: ok=${o.optBoolean("ok")} steps=${o.optJSONArray("steps")?.toString() ?: "[]"}")
                 if(o.has("error")) log("FARMLIST TARGET ERROR (${x}|${y}): ${o.optString("error").take(1400)}")
                 if(o.has("available")) log("FARMLIST AVAILABLE: ${o.optJSONArray("available")?.toString()?.take(1200)}")
-            } catch(e:Exception) {
-                log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
             }
+
             webView.evaluateJavascript("try{delete window[${JSONObject.quote(key)}];}catch(e){}",null)
-            val ok = try { o.optBoolean("ok") } catch(_:Exception) { false }
+            val ok = o?.optBoolean("ok") == true
             if(!ok) {
                 log("FARMLIST STOP: target (${x}|${y}) belum berhasil di-save, popup berikutnya tidak dibuka")
                 return@evaluateJavascript
