@@ -1043,62 +1043,40 @@ class MainActivity : AppCompatActivity() {
 
                 let save=null;
 
-                // Untuk OASIS: setelah X/Y diisi, pindahkan focus ke input unitAmount.
-                // Perpindahan focus ini membuat field koordinat kehilangan focus sehingga
-                // Travian menjalankan lookup target/village secara asynchronous.
-                // Tunggu 2 detik agar hasil lookup masuk dan tombol Save menjadi aktif.
-                if(${oasis}) {
-                  let currentForm=form;
-                  const troopFocus=currentForm.querySelector('input.unitAmount') ||
-                    currentForm.querySelector('input.unitAmount[name="t1"]') ||
-                    document.querySelector('input.unitAmount[name="t1"]') ||
-                    document.querySelector('input.unitAmount');
-                  if(!troopFocus){
-                    result.error='unitAmount input not found';
-                    window[KEY]=result; return;
-                  }
-                  try {
-                    troopFocus.scrollIntoView({block:'center',inline:'center'});
-                    troopFocus.focus();
-                    result.steps.push('unitAmount_focused');
-                  } catch(e) {
-                    result.error='unitAmount focus failed: '+String(e&&e.message||e);
-                    window[KEY]=result; return;
-                  }
+                // Setelah X/Y diisi, selalu pindahkan focus ke input troop (t1).
+                // Ini sama dengan flow OASIS: focus berpindah dari koordinat ke t1,
+                // sehingga Travian menjalankan lookup target/village sebelum Save.
+                let currentForm=form;
+                const troopFocus=currentForm.querySelector('input.unitAmount[name="t1"]') ||
+                  currentForm.querySelector('input.unitAmount') ||
+                  document.querySelector('input.unitAmount[name="t1"]') ||
+                  document.querySelector('input.unitAmount');
+                if(!troopFocus){
+                  result.error='t1/unitAmount input not found';
+                  window[KEY]=result; return;
+                }
+                try {
+                  troopFocus.scrollIntoView({block:'center',inline:'center'});
+                  troopFocus.focus();
+                  result.steps.push('t1_focused');
+                } catch(e) {
+                  result.error='t1 focus failed: '+String(e&&e.message||e);
+                  window[KEY]=result; return;
+                }
 
-                  await sleep(2000);
-                  result.steps.push('unitAmount_focus_wait=2000ms');
+                await sleep(2000);
+                result.steps.push('t1_focus_wait=2000ms');
 
-                  // React/Travian dapat mengganti form setelah lookup koordinat.
-                  // Ambil kembali form dan tombol Save terbaru sebelum klik.
-                  currentForm=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm') ||
-                    [...document.querySelectorAll('form')].find(f=>{
-                      const xs=f.querySelector('input[name="x"]');
-                      const ys=f.querySelector('input[name="y"]');
-                      return xs&&ys;
-                    }) || currentForm;
-                  form=currentForm;
+                // React/Travian dapat mengganti form setelah lookup koordinat.
+                currentForm=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm') ||
+                  [...document.querySelectorAll('form')].find(f=>{
+                    const xs=f.querySelector('input[name="x"]');
+                    const ys=f.querySelector('input[name="y"]');
+                    return xs&&ys;
+                  }) || currentForm;
+                form=currentForm;
 
-                  for(let i=0;i<20;i++){
-                    save=form?.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green[type="submit"]') ||
-                         form?.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green') ||
-                         form?.querySelector('button.save[type="submit"]');
-                    if(save && !save.disabled) break;
-                    await sleep(250);
-                  }
-                  if(!save){
-                    result.error='Save button not found after unitAmount focus';
-                    result.formText=clean(form?.innerText).slice(0,2200);
-                    window[KEY]=result; return;
-                  }
-                  result.steps.push('save_found_disabled='+!!save.disabled);
-                  if(save.disabled){
-                    result.error='Save button still disabled after unitAmount focus wait';
-                    result.formText=clean(form?.innerText).slice(0,2200);
-                    window[KEY]=result; return;
-                  }
-                } else {
-                  // Jalur lama untuk Travco tetap boleh mengisi troops.
+                // Setelah focus t1 dan lookup selesai, isi jumlah troop untuk Travco.
 
                   let troopInput=form.querySelector('input[name="'+troop+'"],input.unitAmount[name="'+troop+'"]');
                   if(!troopInput){
@@ -1117,7 +1095,6 @@ class MainActivity : AppCompatActivity() {
                   } else result.steps.push('troop_input_not_found');
 
                   await sleep(300);
-                }
 
                 for(let i=0;i<20;i++){
                   save=form.querySelector('button.textButtonV2.buttonFramed.save.rectangle.withText.green[type="submit"]') ||
