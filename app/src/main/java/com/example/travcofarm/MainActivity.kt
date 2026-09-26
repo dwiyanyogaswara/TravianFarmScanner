@@ -850,6 +850,8 @@ class MainActivity : AppCompatActivity() {
             loadFarmLists()
             return
         }
+        // Travco selalu diambil dari DB dengan distance ASC, sehingga target
+        // terdekat masuk lebih dulu. Kapasitas dihitung dari Farmlist yang dicentang.
         val rows=if(oasis) db.oasisCoords() else db.travcoCoords()
         if(oasis) {
             log("FARMLIST START source=OASIS lists=${lists.joinToString(" | ")} targets=${rows.size} (maks 100 target/list, troops tidak di-set)")
@@ -866,7 +868,7 @@ class MainActivity : AppCompatActivity() {
         val skippedRows = rows.size - processRows.size
 
         if (skippedRows > 0) {
-            log("FARMLIST WARNING: DB=${rows.size} target, checklist=${lists.size} list (kapasitas=$capacity). Tetap add $processRows.size target, skip $skippedRows target karena Farmlist checklist penuh.")
+            log("FARMLIST WARNING: DB=${rows.size} target, checklist=${lists.size} list (kapasitas=$capacity). Proses ${processRows.size} target distance terendah; ${skippedRows} target sisanya tidak dimasukkan karena checklist habis.")
         } else {
             log("FARMLIST CAPACITY OK: DB=${rows.size} target, checklist=${lists.size} list, kapasitas=$capacity")
         }
@@ -900,9 +902,16 @@ class MainActivity : AppCompatActivity() {
             val completedBefore = listIndex * 100 + coords.size
             if(completedBefore < 1) { log("FARMLIST END completed=0"); return }
             val nextStart = completedBefore
-            if(nextStart < (if(oasis) db.oasisCoords().size else db.travcoCoords().size)) {
+            log("FARMLIST COMPLETE: '${list}' selesai, $completedBefore/${allRows.size} target dari DB yang diproses")
+            // allRows sudah dibatasi sesuai jumlah Farmlist yang dicentang.
+            // Jadi setelah batch terakhir dari checklist terakhir selesai, STOP.
+            // Jangan membandingkan dengan seluruh isi DB karena DB bisa > kapasitas checklist.
+            if(nextStart < allRows.size) {
                 val nextListIndex = listIndex + 1
-                if(nextListIndex >= allLists.size) { log("FARMLIST ERROR: farmlist tidak cukup untuk sisa target"); return }
+                if(nextListIndex >= allLists.size) {
+                    log("FARMLIST END: checklist habis; completed=$nextStart/${allRows.size} target yang diproses")
+                    return
+                }
                 val nextEnd=minOf(nextStart + 100, allRows.size)
                 log("FARMLIST NEXT: '${allLists[nextListIndex]}' targets ${nextStart+1}-$nextEnd")
                 log("FARMLIST BATCH ${nextListIndex+1}/${allLists.size}: '${allLists[nextListIndex]}' targets ${nextStart+1}-$nextEnd")
