@@ -324,12 +324,15 @@ class MainActivity : AppCompatActivity() {
                 val rows = obj.optJSONArray("rows") ?: JSONArray()
                 var saved = 0
                 var skipped = 0
+for (i in 0 until rows.length()) {
+    val r = rows.optJSONObject(i)
 
-                for (i in 0 until rows.length()) {
-                    val r = rows.optJSONObject(i) ?: run {
-                        skipped++
-                        continue
-                    }
+    if (r == null) {
+        skipped++
+        log("TRAVCO ROW $i SKIP: invalid JSON object")
+        continue
+    }
+                
                     val coord = r.optString("coord")
                     val parts = coord.split("|")
                     val x = parts.getOrNull(0)?.toIntOrNull()
