@@ -1140,15 +1140,30 @@ class MainActivity : AppCompatActivity() {
                 save.click();
                 result.steps.push('save_clicked');
 
-                // Wait for the modal/form to disappear OR the target to appear in the list.
-                for(let i=0;i<80;i++){
+                // IMPORTANT: jangan lanjut ke target berikutnya hanya karena koordinat
+                // sudah terlihat di belakang popup. Tunggu popup/form benar-benar hilang
+                // setelah Save diproses oleh Travian. Ini meniru flow Oasis: SAVE selesai
+                // dulu -> baru buka Add Target berikutnya.
+                let saveCompleted=false;
+                for(let i=0;i<100;i++){
                   const still=document.querySelector('#farmListTargetForm,form.farmListTargetForm,.farmListTargetForm');
-                  const body=clean(wrapper.innerText);
-                  const coordSeen=body.includes('(${x}|${y})') || (body.includes('${x}') && body.includes('${y}'));
-                  if(!still || coordSeen){ result.ok=true; window[KEY]=result; return; }
+                  if(!still){
+                    saveCompleted=true;
+                    break;
+                  }
                   await sleep(150);
                 }
-                result.error='Save clicked but form remained open';
+                if(!saveCompleted){
+                  result.error='Save clicked but form remained open';
+                  window[KEY]=result; return;
+                }
+
+                // Beri waktu Travian menyelesaikan request/render target sebelum popup
+                // berikutnya dibuka. Tanpa jeda ini popup berikutnya kadang muncul terlalu cepat.
+                await sleep(900);
+                result.steps.push('save_confirmed_form_closed');
+                result.steps.push('post_save_wait=900ms');
+                result.ok=true;
                 window[KEY]=result;
               }catch(e){
                 result.error=String(e&&e.message||e);
@@ -1187,8 +1202,18 @@ class MainActivity : AppCompatActivity() {
                 log("FARMLIST RESULT PARSE ERROR: ${e.message}; RAW=${raw.take(1800)}")
             }
             webView.evaluateJavascript("try{delete window[${JSONObject.quote(key)}];}catch(e){}",null)
-            if(index+1<coords.size) handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1,oasis,allLists,listIndex,allRows) },900)
-            else log("FARMLIST END processed=${coords.size}")
+            val ok = try { o.optBoolean("ok") } catch(_:Exception) { false }
+            if(!ok) {
+                log("FARMLIST STOP: target (${x}|${y}) belum berhasil di-save, popup berikutnya tidak dibuka")
+                return@evaluateJavascript
+            }
+            // JS sudah memastikan form popup benar-benar tertutup dan menunggu 900 ms
+            // setelah Save. Tambahan 300 ms di Android menjaga urutan DOM/network agar
+            // popup Add Target berikutnya tidak dibuka terlalu cepat.
+            if(index+1<coords.size) {
+                log("FARMLIST NEXT TARGET: Save (${x}|${y}) confirmed -> buka Add Target berikutnya")
+                handler.postDelayed({ addFarmTargetsSequentially(list,unit,count,coords,index+1,oasis,allLists,listIndex,allRows) },300)
+            } else log("FARMLIST END processed=${coords.size}")
         }
     }
 
