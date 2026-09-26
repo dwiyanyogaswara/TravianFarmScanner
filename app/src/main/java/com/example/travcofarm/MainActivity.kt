@@ -34,7 +34,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.net.URLEncoder
-import kotlin.math.ceil
 import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity() {
@@ -99,7 +98,8 @@ class MainActivity : AppCompatActivity() {
         loginRow.addView(button("LOGOUT") { logoutTravian() }, lp(1f))
         content.addView(loginRow)
 
-        content.addView(button("SCAN TRAVCO VILLAGE") { scanTravco() })
+        content.addView(button("BUKA TRAVCO / CARI MANUAL") { scanTravco() })
+        content.addView(button("ADD TO DB TRAVCO") { addTravcoWebViewToDb() })
         travcoCount = label("Travco DB: ${db.travcoCount()}")
         content.addView(travcoCount)
 
@@ -256,33 +256,111 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scanTravco() {
-        val serverHost = Uri.parse(normalizeServer(serverInput.text.toString())).host ?: ""
-        val x = xInput.text.toString().trim()
-        val y = yInput.text.toString().trim()
-        log("TRAVCO SCAN START host=$serverHost center=($x|$y)")
-        if (serverHost.isBlank()) { log("TRAVCO ERROR: invalid server"); return }
+        log("TRAVCO WEBVIEW OPEN")
+        log("TRAVCO: server, X, Y, filter, dan tombol Search dikerjakan MANUAL oleh user di WebView")
         currentPage = "https://travcotools.com/en/inactive-search/"
         webView.loadUrl(currentPage)
-        handler.postDelayed({ runTravcoSearch(serverHost, x, y) }, 1800)
     }
 
-    private fun runTravcoSearch(serverHost: String, x: String, y: String) {
+    private fun addTravcoWebViewToDb() {
+        log("TRAVCO ADD TO DB: membaca hasil list yang sedang tampil di WebView...")
         val js = """
           (function(){
-            const setVal=(sel,val)=>{const e=document.querySelector(sel);if(!e)return false;e.value=val;e.dispatchEvent(new Event('change',{bubbles:true}));e.dispatchEvent(new Event('input',{bubbles:true}));return true};
-            const opts=[...document.querySelectorAll('#id_travian_server option')];
-            const opt=opts.find(o=>(o.textContent||'').trim().toLowerCase()==='${jsEscape(serverHost.lowercase())}');
-            const report={url:location.href,serverFound:!!opt,form:!!document.querySelector('#id_travian_server'),x:setVal('#id_x','${jsEscape(x)}'),y:setVal('#id_y','${jsEscape(y)}'),days:setVal('#id_days','7'),order:setVal('#id_order_by','population'),pageSize:setVal('#id_page_size','100')};
-            if(opt){document.querySelector('#id_travian_server').value=opt.value;document.querySelector('#id_travian_server').dispatchEvent(new Event('change',{bubbles:true}));}
-            const submit=document.querySelector("button.btn.btn-light.primary[type='submit']")||document.querySelector("button[type='submit'],input[type='submit']");
-            report.submit=!!submit;
-            if(submit) submit.click();
-            return JSON.stringify(report);
+            const clean=v=>(v||'').replace(/\\s+/g,' ').trim();
+            const table=document.querySelector('main table') ||
+                        document.querySelector('table.table') ||
+                        document.querySelector('table');
+            if(!table){
+              return JSON.stringify({
+                ok:false,
+                reason:'result table not found',
+                url:location.href,
+                body:clean(document.body?.innerText).slice(0,1800)
+              });
+            }
+            const rows=[...table.querySelectorAll('tbody tr')].map(row=>{
+              const c=[...row.querySelectorAll('td')];
+              const link=c.find(td=>td.querySelector('a.js-travian_village_url,a[href*="karte.php"]'))
+                         ?.querySelector('a.js-travian_village_url,a[href*="karte.php"]');
+              const text=v=>clean(v);
+              const href=link?.href||'';
+              const hrefCoord=href.match(/[?&]x=(-?\\d+).*?[?&]y=(-?\\d+)/i);
+              const coordText=text(
+                link?.querySelector('.text-muted.small')?.textContent ||
+                link?.getAttribute('data-original-title') ||
+                link?.getAttribute('title') || ''
+              );
+              const coord=hrefCoord ? hrefCoord[1]+'|'+hrefCoord[2] :
+                           ((coordText.match(/(-?\\d+)\\s*\\|\\s*(-?\\d+)/)||[]).slice(1).join('|'));
+              const distance=text(c[1]?.textContent);
+              const account=text(c[2]?.querySelector('.detail-button')?.textContent || c[2]?.textContent);
+              const village=text(link?.getAttribute('data-original-title') || link?.getAttribute('title') || link?.textContent);
+              const population=text(
+                c[3]?.querySelector('[data-original-title="Population"],[title="Population"]')?.textContent ||
+                c[3]?.textContent
+              );
+              return {distance,account,village,population,coord};
+            }).filter(r=>r.coord && r.coord.includes('|'));
+
+            return JSON.stringify({
+              ok:true,
+              url:location.href,
+              count:rows.length,
+              rows:rows
+            });
           })();
         """.trimIndent()
+
         webView.evaluateJavascript(js) { result ->
-            log("TRAVCO FORM RESULT: ${cleanJsResult(result)}")
-            handler.postDelayed({ scrapeTravcoDom() }, 3500)
+            val raw = unquoteJs(result)
+            try {
+                val obj = JSONObject(raw)
+                log("TRAVCO WEBVIEW RESULT: ok=${obj.optBoolean("ok")} url=${obj.optString("url")} count=${obj.optInt("count")}")
+                if (!obj.optBoolean("ok")) {
+                    log("TRAVCO ADD TO DB ERROR: ${obj.optString("reason")} BODY=${obj.optString("body").take(1800)}")
+                    return@evaluateJavascript
+                }
+
+                val rows = obj.optJSONArray("rows") ?: JSONArray()
+                var saved = 0
+                var skipped = 0
+
+                for (i in 0 until rows.length()) {
+                    val r = rows.optJSONObject(i) ?: run {
+                        skipped++
+                        continue
+                    }
+                    val coord = r.optString("coord")
+                    val parts = coord.split("|")
+                    val x = parts.getOrNull(0)?.toIntOrNull()
+                    val y = parts.getOrNull(1)?.toIntOrNull()
+                    if (x == null || y == null) {
+                        skipped++
+                        log("TRAVCO ROW $i SKIP: coordinate='$coord'")
+                        continue
+                    }
+
+                    val distanceText = r.optString("distance")
+                    val distance = Regex("-?\\d+(?:[.,]\\d+)?")
+                        .find(distanceText)?.value?.replace(',', '.')?.toDoubleOrNull() ?: 0.0
+                    val population = Regex("\\d+")
+                        .find(r.optString("population"))?.value?.toLongOrNull() ?: 0L
+
+                    db.insertTravco(
+                        x, y,
+                        r.optString("account"),
+                        r.optString("village"),
+                        distance,
+                        population
+                    )
+                    saved++
+                }
+
+                travcoCount.text = "Travco DB: ${db.travcoCount()}"
+                log("TRAVCO ADD TO DB END: saved=$saved skipped=$skipped totalDB=${db.travcoCount()}")
+            } catch (e: Exception) {
+                log("TRAVCO ADD TO DB PARSE ERROR: ${e.message}; RAW=${raw.take(2000)}")
+            }
         }
     }
 
@@ -769,18 +847,40 @@ class MainActivity : AppCompatActivity() {
         }
         if(rows.isEmpty()) { log("FARMLIST ERROR: database source empty"); return }
 
-        val requiredLists=ceil(rows.size / 100.0).toInt()
-        if(lists.size < requiredLists) {
-            log("FARMLIST ERROR: ${rows.size} target membutuhkan $requiredLists farmlist (100 target/list), tetapi hanya ${lists.size} checklist")
+        // Satu Farmlist Travian menampung maksimal 100 target.
+        // Jika isi DB lebih banyak daripada kapasitas checklist, tetap proses
+        // target yang muat ke Farmlist yang dicentang dan jangan membatalkan seluruh proses.
+        val capacity = lists.size * 100
+        val processRows = rows.take(capacity)
+        val skippedRows = rows.size - processRows.size
+
+        if (skippedRows > 0) {
+            log("FARMLIST WARNING: DB=${rows.size} target, checklist=${lists.size} list (kapasitas=$capacity). Tetap add $processRows.size target, skip $skippedRows target karena Farmlist checklist penuh.")
+        } else {
+            log("FARMLIST CAPACITY OK: DB=${rows.size} target, checklist=${lists.size} list, kapasitas=$capacity")
+        }
+
+        if (processRows.isEmpty()) {
+            log("FARMLIST ERROR: tidak ada target yang bisa diproses dari checklist")
             return
         }
 
         val server=normalizeServer(serverInput.text.toString())
         webView.loadUrl("$server/build.php?gid=16&tt=99")
         handler.postDelayed({
-            val firstEnd=minOf(100, rows.size)
+            val firstEnd=minOf(100, processRows.size)
             log("FARMLIST BATCH 1/${lists.size}: '${lists[0]}' targets 1-$firstEnd")
-            addFarmTargetsSequentially(lists[0], if(oasis) "" else unit, if(oasis) 0 else count, rows.subList(0, firstEnd), 0, oasis, lists, 0, rows)
+            addFarmTargetsSequentially(
+                lists[0],
+                if(oasis) "" else unit,
+                if(oasis) 0 else count,
+                processRows.subList(0, firstEnd),
+                0,
+                oasis,
+                lists,
+                0,
+                processRows
+            )
         },4500)
     }
 
