@@ -278,29 +278,38 @@ class MainActivity : AppCompatActivity() {
                 body:clean(document.body?.innerText).slice(0,1800)
               });
             }
-            const rows=[...table.querySelectorAll('tbody tr')].map(row=>{
+            const rows=[...table.querySelectorAll('tr')].map(row=>{
               const c=[...row.querySelectorAll('td')];
-              const link=c.find(td=>td.querySelector('a.js-travian_village_url,a[href*="karte.php"]'))
-                         ?.querySelector('a.js-travian_village_url,a[href*="karte.php"]');
-              const text=v=>clean(v);
-              const href=link?.href||'';
-              const hrefCoord=href.match(/[?&]x=(-?\\d+).*?[?&]y=(-?\\d+)/i);
-              const coordText=text(
-                link?.querySelector('.text-muted.small')?.textContent ||
-                link?.getAttribute('data-original-title') ||
-                link?.getAttribute('title') || ''
+              const link=[...row.querySelectorAll('a')].find(a=>
+                /karte\.php/i.test(a.getAttribute('href')||'') ||
+                a.classList.contains('js-travian_village_url') ||
+                /-?\d+\s*\|\s*-?\d+/.test(clean(a.textContent))
               );
+              if(!link || c.length < 2) return null;
+
+              const text=v=>clean(v);
+              const href=link.getAttribute('href')||link.href||'';
+              const hrefCoord=href.match(/[?&]x=(-?\d+).*?[?&]y=(-?\d+)/i);
+              const linkText=text(link.textContent);
+              const titleText=text(link.getAttribute('data-original-title') || link.getAttribute('title') || '');
+              const coordSource=linkText+' '+titleText+' '+text(link.closest('td')?.textContent);
+              const coordMatch=coordSource.match(/(-?\d+)\s*\|\s*(-?\d+)/);
               const coord=hrefCoord ? hrefCoord[1]+'|'+hrefCoord[2] :
-                           ((coordText.match(/(-?\\d+)\\s*\\|\\s*(-?\\d+)/)||[]).slice(1).join('|'));
+                           (coordMatch ? coordMatch[1]+'|'+coordMatch[2] : '');
+
+              const linkCell=link.closest('td');
+              const linkIndex=linkCell ? c.indexOf(linkCell) : -1;
               const distance=text(c[1]?.textContent);
-              const account=text(c[2]?.querySelector('.detail-button')?.textContent || c[2]?.textContent);
-              const village=text(link?.getAttribute('data-original-title') || link?.getAttribute('title') || link?.textContent);
+              const accountCell=linkIndex>1 ? c[linkIndex-1] : c[2];
+              const account=text(accountCell?.querySelector('.detail-button')?.textContent || accountCell?.textContent);
+              const village=titleText || linkText.replace(/\[-?\d+\s*\|\s*-?\d+\]/,'').trim();
+              const populationCell=linkIndex>0 ? c[linkIndex] : c[3];
               const population=text(
-                c[3]?.querySelector('[data-original-title="Population"],[title="Population"]')?.textContent ||
-                c[3]?.textContent
+                populationCell?.querySelector('[data-original-title="Population"],[title="Population"]')?.textContent ||
+                populationCell?.textContent
               );
               return {distance,account,village,population,coord};
-            }).filter(r=>r.coord && r.coord.includes('|'));
+            }).filter(r=>r && r.coord && r.coord.includes('|'));
 
             return JSON.stringify({
               ok:true,
@@ -324,15 +333,14 @@ class MainActivity : AppCompatActivity() {
                 val rows = obj.optJSONArray("rows") ?: JSONArray()
                 var saved = 0
                 var skipped = 0
-for (i in 0 until rows.length()) {
-    val r = rows.optJSONObject(i)
 
-    if (r == null) {
-        skipped++
-        log("TRAVCO ROW $i SKIP: invalid JSON object")
-        continue
-    }
-                
+                for (i in 0 until rows.length()) {
+                    val r = rows.optJSONObject(i)
+                    if (r == null) {
+                        skipped++
+                        log("TRAVCO ROW $i SKIP: invalid JSON object")
+                        continue
+                    }
                     val coord = r.optString("coord")
                     val parts = coord.split("|")
                     val x = parts.getOrNull(0)?.toIntOrNull()
