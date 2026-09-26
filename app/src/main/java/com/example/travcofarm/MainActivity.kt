@@ -110,6 +110,7 @@ class MainActivity : AppCompatActivity() {
         val dbRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         dbRow.addView(button("DB OVERVIEW") { showDbOverview() }, lp(1f))
         dbRow.addView(button("COPY LOG") { copyLog() }, lp(1f))
+        dbRow.addView(button("HAPUS LOG") { clearLog() }, lp(1f))
         content.addView(dbRow)
 
         content.addView(label("FARMLIST AKUN (CHECKLIST)", 20f))
@@ -577,6 +578,10 @@ class MainActivity : AppCompatActivity() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Travian Farm Scanner Log", text))
         log("LOG COPIED: ${text.length} chars")
+    }
+
+    private fun clearLog() {
+        logView.text = ""
     }
 
     private fun showDbOverview() {
@@ -1195,6 +1200,12 @@ class MainActivity : AppCompatActivity() {
                 log("FARMLIST STOP: target (${x}|${y}) belum berhasil di-save, popup berikutnya tidak dibuka")
                 return@evaluateJavascript
             }
+            // Save sudah berhasil. Target yang baru dimasukkan tidak perlu lagi
+            // diproses dari DB Travco, jadi hapus koordinat tersebut sekarang.
+            db.deleteTravco(x, y)
+            travcoCount.text = "Travco DB: ${db.travcoCount()}"
+            log("TRAVCO DB DELETE AFTER SAVE: ($x|$y)")
+
             // JS sudah memastikan form popup benar-benar tertutup dan menunggu 900 ms
             // setelah Save. Tambahan 300 ms di Android menjaga urutan DOM/network agar
             // popup Add Target berikutnya tidak dibuka terlalu cepat.
@@ -1255,6 +1266,7 @@ class MainActivity : AppCompatActivity() {
         }
         override fun onUpgrade(db:android.database.sqlite.SQLiteDatabase,oldVersion:Int,newVersion:Int){}
         fun insertTravco(x:Int,y:Int,a:String,v:String,d:Double,p:Long){writableDatabase.execSQL("INSERT OR REPLACE INTO travco(x,y,account,village,distance,population) VALUES(?,?,?,?,?,?)",arrayOf(x,y,a,v,d,p))}
+        fun deleteTravco(x:Int,y:Int){writableDatabase.delete("travco", "x=? AND y=?", arrayOf(x.toString(), y.toString()))}
         fun insertOasis(x:Int,y:Int,o:Boolean,t:String,f:String,a:String,owner:String,alliance:String){writableDatabase.execSQL("INSERT OR REPLACE INTO oasis(x,y,occupied,oasisType,filterType,animals,owner,alliance) VALUES(?,?,?,?,?,?,?,?)",arrayOf(x,y,if(o)1 else 0,t,f,a,owner,alliance))}
         fun travcoCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM travco",null).use{it.moveToFirst();it.getInt(0)}
         fun oasisCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis",null).use{it.moveToFirst();it.getInt(0)}
