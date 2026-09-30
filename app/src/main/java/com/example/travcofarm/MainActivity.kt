@@ -51,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var travcoCount: TextView
     private lateinit var oasisCount: TextView
+    private lateinit var cropCount: TextView
 
     private val handler = Handler(Looper.getMainLooper())
     private val db by lazy { ScannerDb(this) }
@@ -59,6 +60,9 @@ class MainActivity : AppCompatActivity() {
     private var oasisPending = 0
     private var oasisDone = 0
     private var oasisStartedAt = 0L
+    private var cropPending = 0
+    private var cropDone = 0
+    private var cropStartedAt = 0L
 
     private val prefs by lazy { getSharedPreferences("scanner", MODE_PRIVATE) }
     private val hardUser = "TNR#EMBUH"
@@ -106,6 +110,10 @@ class MainActivity : AppCompatActivity() {
         content.addView(button("SCAN OASIS MAP") { scanOasis() })
         oasisCount = label("Oasis DB: ${db.oasisCount()}")
         content.addView(oasisCount)
+
+        content.addView(button("SCAN CROP 15c / 9c") { scanCrop() })
+        cropCount = label("Crop DB: ${db.cropCount()}")
+        content.addView(cropCount)
 
         val dbRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         dbRow.addView(button("DB OVERVIEW") { showDbOverview() }, lp(1f))
@@ -160,7 +168,7 @@ class MainActivity : AppCompatActivity() {
         log("APP START")
         log("Hardcoded Travian account enabled")
         log("WebView mode=DESKTOP, scroll=ON")
-        log("Travco DB=${db.travcoCount()}, Oasis DB=${db.oasisCount()}")
+        log("Travco DB=${db.travcoCount()}, Oasis DB=${db.oasisCount()}, Crop DB=${db.cropCount()}")
     }
 
     private fun configureWebView() {
@@ -180,6 +188,7 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
         webView.addJavascriptInterface(AndroidBridge(), "AndroidBridge")
+        webView.addJavascriptInterface(CropBridge(), "CropBridge")
         webView.webChromeClient = WebChromeClient()
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
@@ -574,6 +583,156 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun scanCrop() {
+        val server = normalizeServer(serverInput.text.toString())
+        val cx = xInput.text.toString().toIntOrNull()
+        val cy = yInput.text.toString().toIntOrNull()
+        val radius = radiusInput.text.toString().toIntOrNull()
+        if (cx == null || cy == null || radius == null || radius < 0) {
+            log("CROP ERROR: X/Y/radius invalid x='${xInput.text}' y='${yInput.text}' radius='${radiusInput.text}'")
+            return
+        }
+        log("CROP SCAN START server=$server center=($cx|$cy) radius=$radius")
+        log("CROP DB BEFORE: total=${db.cropCount()}")
+        pageReady = false
+        webView.loadUrl("$server/karte.php")
+        handler.postDelayed({ verifyCropPageAndStart(cx, cy, radius) }, 3000)
+    }
+
+    private fun verifyCropPageAndStart(cx: Int, cy: Int, radius: Int) {
+        webView.evaluateJavascript("""
+            (function(){
+              return JSON.stringify({
+                url:location.href,
+                title:document.title,
+                ready:document.readyState,
+                bodyChars:(document.body?.innerText||'').length,
+                hasTravianMap:!!document.querySelector('#map, .map, #mapContainer'),
+                cookieEnabled:navigator.cookieEnabled
+              });
+            })();
+        """.trimIndent()) { result ->
+            val raw = unquoteJs(result)
+            log("CROP PAGE CHECK: ${raw.take(1000)}")
+            startCropRequests(cx, cy, radius)
+        }
+    }
+
+    private fun startCropRequests(cx: Int, cy: Int, radius: Int) {
+        val step = 20
+        val startX = cx - radius
+        val endX = cx + radius
+        val startY = cy - radius
+        val endY = cy + radius
+        val xs = (startX..endX step step).toMutableList().apply { if (lastOrNull() != endX) add(endX) }
+        val ys = (startY..endY step step).toMutableList().apply { if (lastOrNull() != endY) add(endY) }
+        cropPending = xs.size * ys.size
+        cropDone = 0
+        cropStartedAt = System.currentTimeMillis()
+        log("CROP GRID: ${xs.size}x${ys.size}=$cropPending requests, step=$step")
+        var seq = 0
+        for (y in ys) for (x in xs) {
+            seq++
+            val requestNo = seq
+            val js = """
+              (async function(){
+                const u=location.origin+'/api/v1/map/position';
+                const payload={data:{x:$x,y:$y,zoomLevel:2,ignorePositions:[]}};
+                const out={requestNo:$requestNo,x:$x,y:$y,url:u,payload:payload};
+                try{
+                  const r=await fetch(u,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','accept':'application/json, text/plain, */*'},body:JSON.stringify(payload)});
+                  const t=await r.text();
+                  out.status=r.status;out.ok=r.ok;out.contentType=r.headers.get('content-type')||'';out.length=t.length;out.body=t;
+                }catch(e){out.status=0;out.ok=false;out.error=String(e&&e.stack||e);}
+                CropBridge.onCropResponse(JSON.stringify(out));
+              })();
+            """.trimIndent()
+            log("CROP REQUEST [$requestNo/$cropPending]: center=($x|$y)")
+            webView.evaluateJavascript(js, null)
+        }
+    }
+
+    private inner class CropBridge {
+        @JavascriptInterface fun onCropResponse(payload: String) {
+            runOnUiThread {
+                cropDone++
+                try {
+                    val o = JSONObject(payload)
+                    val status = o.optInt("status")
+                    val body = o.optString("body")
+                    log("CROP RESPONSE [$cropDone/$cropPending] center=(${o.optInt("x")}|${o.optInt("y")}) HTTP=$status ok=${o.optBoolean("ok")} bytes=${o.optInt("length")}")
+                    if (body.isNotBlank()) parseCropJson(body, o.optInt("x"), o.optInt("y"))
+                } catch (e: Exception) {
+                    log("CROP BRIDGE ERROR: ${e.message}; PAYLOAD=${payload.take(1600)}")
+                }
+                if (cropDone >= cropPending) {
+                    cropCount.text = "Crop DB: ${db.cropCount()}"
+                    log("CROP SCAN END total=${db.cropCount()} elapsed=${System.currentTimeMillis() - cropStartedAt}ms")
+                }
+            }
+        }
+    }
+
+    private fun parseCropJson(json: String, requestX: Int, requestY: Int) {
+        try {
+            val root = JSONObject(json)
+            val tiles = root.optJSONArray("tiles") ?: return
+
+            // Map response also contains nearby oasis tiles.  Travian's crop finder
+            // uses oasis tiles within 3 squares and takes the first three bonuses.
+            val oasis = ArrayList<Triple<Int, Int, Int>>()
+            for (i in 0 until tiles.length()) {
+                val t = tiles.optJSONObject(i) ?: continue
+                val title = t.optString("title")
+                if (!title.contains("{k.bt}", true) && !title.contains("{k.fo}", true)) continue
+                val ox = readCoord(t, "x") ?: continue
+                val oy = readCoord(t, "y") ?: continue
+                val text = stripFormat(t.optString("text"))
+                val bonus = Regex("\\{a\\.r4\\}\\s*(\\d+)%", RegexOption.IGNORE_CASE)
+                    .find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                if (bonus != null) oasis.add(Triple(ox, oy, bonus))
+            }
+
+            var saved = 0
+            for (i in 0 until tiles.length()) {
+                val t = tiles.optJSONObject(i) ?: continue
+                val title = t.optString("title")
+                val x = readCoord(t, "x") ?: continue
+                val y = readCoord(t, "y") ?: continue
+                val text = stripFormat(t.optString("text"))
+
+                // Free crop fields are identified directly by the map tile title.
+                // We also accept f1/f6 markers in the tile text for servers/themes
+                // that expose the field marker there instead of in title.
+                val type = when {
+                    title.contains("{k.f6}", true) || text.contains("{k.f6}", true) -> "15c"
+                    title.contains("{k.f1}", true) || text.contains("{k.f1}", true) -> "9c"
+                    else -> continue
+                }
+
+                val owner = extract(text, "\\{k\\.spieler\\}\\s*([^<]+)<")
+                val village = extract(text, "\\{k\\.dorf\\}\\s*([^<]+)<")
+
+                val nearbyBonuses = oasis.asSequence()
+                    .filter { (_, ox, oy) -> kotlin.math.abs(ox - x) < 4 && kotlin.math.abs(oy - y) < 4 }
+                    .map { it.third }
+                    .sortedDescending()
+                    .take(3)
+                    .toList()
+                val cropBonus = if (nearbyBonuses.isEmpty()) "0%" else "+${nearbyBonuses.sum()}%"
+
+                val centerX = xInput.text.toString().toIntOrNull() ?: 0
+                val centerY = yInput.text.toString().toIntOrNull() ?: 0
+                db.insertCrop(x, y, type, village, owner, cropBonus, distance(centerX, centerY, x, y))
+                saved++
+                if (saved <= 10) log("CROP SAVE [$saved]: $type ($x|$y) owner='$owner' bonus='$cropBonus' village='$village'")
+            }
+            if (saved > 0) log("CROP PARSE center=($requestX|$requestY): tiles=${tiles.length()} nearbyOasis=${oasis.size} saved=$saved")
+        } catch (e: Exception) {
+            log("CROP JSON ERROR center=($requestX|$requestY): ${e.message}; JSON=${json.take(1800)}")
+        }
+    }
+
     private fun copyLog() {
         val text = logView.text?.toString().orEmpty()
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -586,8 +745,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showDbOverview(initialQuery: String = "") {
-        val searchInput = EditText(this).apply {
-            hint = "Cari koordinat, nama, akun, tipe, owner, alliance..."
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(8))
+            setBackgroundColor(Color.rgb(38, 38, 38))
+        }
+
+        fun searchBox(hint:String, initial:String = ""): EditText = EditText(this).apply {
+            this.hint = hint
+            setText(initial)
             setTextColor(Color.WHITE)
             setHintTextColor(Color.LTGRAY)
             textSize = 14f
@@ -595,208 +761,115 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(12), dp(8), dp(12), dp(8))
             setBackgroundColor(Color.rgb(65, 65, 65))
         }
-
-        val resultInfo = TextView(this).apply {
+        fun title(text:String) = TextView(this).apply {
+            this.text = text
             setTextColor(Color.WHITE)
-            textSize = 12f
-            setPadding(0, dp(8), 0, dp(8))
+            textSize = 14f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding(0, dp(8), 0, dp(6))
         }
-
-        val tableContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        fun cell(text:String, header:Boolean=false) = TextView(this).apply {
+            this.text=text; setTextColor(Color.WHITE)
+            textSize=if(header) 12f else 11f
+            typeface=if(header) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+            setPadding(dp(8),dp(7),dp(8),dp(7))
+            setBackgroundColor(if(header) Color.rgb(55,75,95) else Color.rgb(48,48,48))
+            isSingleLine=true
         }
-
-        fun cell(text: String, header: Boolean = false): TextView {
-            return TextView(this).apply {
-                this.text = text
-                setTextColor(Color.WHITE)
-                textSize = if (header) 12f else 11f
-                typeface = if (header) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
-                setPadding(dp(8), dp(7), dp(8), dp(7))
-                setBackgroundColor(if (header) Color.rgb(55, 75, 95) else Color.rgb(48, 48, 48))
-                isSingleLine = true
-            }
-        }
-
-        fun buildTable(
-            headers: List<String>,
-            rows: List<List<String>>,
-            deleteKeys: List<Pair<Int, Int>>? = null,
-            onDelete: ((Int, Int) -> Unit)? = null
-        ): HorizontalScrollView {
-            val table = TableLayout(this).apply {
-                isStretchAllColumns = false
-                isShrinkAllColumns = false
-                setBackgroundColor(Color.rgb(35, 35, 35))
-            }
-
-            val headerRow = TableRow(this).apply {
-                setBackgroundColor(Color.rgb(55, 75, 95))
-            }
-            headers.forEach { h ->
-                headerRow.addView(cell(h, true), TableRow.LayoutParams().apply {
-                    setMargins(dp(1), dp(1), dp(1), dp(1))
-                })
-            }
-            if (deleteKeys != null && onDelete != null) {
-                headerRow.addView(cell("Action", true), TableRow.LayoutParams().apply {
-                    setMargins(dp(1), dp(1), dp(1), dp(1))
-                })
-            }
-            table.addView(headerRow)
-
-            rows.forEachIndexed { index, row ->
-                val tr = TableRow(this).apply {
-                    setBackgroundColor(if (index % 2 == 0) Color.rgb(48, 48, 48) else Color.rgb(58, 58, 58))
-                }
-                row.forEach { value ->
-                    tr.addView(cell(value), TableRow.LayoutParams().apply {
-                        setMargins(dp(1), dp(1), dp(1), dp(1))
-                    })
-                }
-
-                if (deleteKeys != null && onDelete != null) {
-                    val key = deleteKeys.getOrNull(index)
-                    val deleteButton = Button(this).apply {
-                        text = "HAPUS"
-                        isAllCaps = false
-                        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
-                        setPadding(dp(8), dp(2), dp(8), dp(2))
-                        setOnClickListener {
-                            if (key != null) onDelete.invoke(key.first, key.second)
-                        }
-                    }
-                    tr.addView(deleteButton, TableRow.LayoutParams().apply {
-                        setMargins(dp(1), dp(1), dp(1), dp(1))
-                    })
-                }
+        fun buildTable(headers:List<String>, rows:List<List<String>>, keys:List<Pair<Int,Int>>, onDelete:(Int,Int)->Unit):HorizontalScrollView {
+            val table=TableLayout(this).apply{isStretchAllColumns=false;isShrinkAllColumns=false;setBackgroundColor(Color.rgb(35,35,35))}
+            val hr=TableRow(this).apply{setBackgroundColor(Color.rgb(55,75,95))}
+            headers.forEach{h->hr.addView(cell(h,true))}
+            hr.addView(cell("Action",true)); table.addView(hr)
+            rows.forEachIndexed{idx,row->
+                val tr=TableRow(this).apply{setBackgroundColor(if(idx%2==0)Color.rgb(48,48,48)else Color.rgb(58,58,58))}
+                row.forEach{v->tr.addView(cell(v))}
+                tr.addView(Button(this).apply{ text="HAPUS";isAllCaps=false;setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,11f);setPadding(dp(8),dp(2),dp(8),dp(2));setOnClickListener{keys.getOrNull(idx)?.let{onDelete(it.first,it.second)}}})
                 table.addView(tr)
             }
-
-            return HorizontalScrollView(this).apply {
-                isHorizontalScrollBarEnabled = true
-                addView(table)
-            }
+            return HorizontalScrollView(this).apply{isHorizontalScrollBarEnabled=true;addView(table)}
+        }
+        fun sectionScroll(view:android.view.View, height:Int):ScrollView = ScrollView(this).apply {
+            isVerticalScrollBarEnabled=true
+            addView(view)
+            layoutParams=LinearLayout.LayoutParams(-1,dp(height)).apply{bottomMargin=dp(10)}
         }
 
-        fun renderTables(query: String) {
-            val q = query.trim()
-            val travco = db.travcoOverviewRows(q, 1000)
-            val centerX = xInput.text.toString().trim().toIntOrNull() ?: 0
-            val centerY = yInput.text.toString().trim().toIntOrNull() ?: 0
-            val oasis = db.oasisOverviewRows(q, centerX, centerY, 1000)
+        val travSearch=searchBox("Cari di TRAVCO: koordinat, village, account...")
+        val oasisSearch=searchBox("Cari di OASIS: koordinat, type, owner, alliance...")
+        val cropSearch=searchBox("Cari di CROP: koordinat, 15c/9c, owner, bonus...")
+        val container=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
 
-            tableContainer.removeAllViews()
+        fun render(){
+            container.removeAllViews()
+            val tq=travSearch.text.toString().trim()
+            val oq=oasisSearch.text.toString().trim()
+            val cq=cropSearch.text.toString().trim()
+            val centerX=xInput.text.toString().toIntOrNull()?:0
+            val centerY=yInput.text.toString().toIntOrNull()?:0
+            val trav=db.travcoOverviewRows(tq,1000000)
+            val oasis=db.oasisOverviewRows(oq,centerX,centerY,1000000)
+            val crop=db.cropOverviewRows(cq,1000000)
 
-            tableContainer.addView(TextView(this).apply {
-                text = "TRAVCO DB — ${travco.size} hasil (urut Distance terendah)"
-                setTextColor(Color.WHITE)
-                textSize = 14f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setPadding(0, dp(8), 0, dp(6))
-            })
-
-            val travcoRows = travco.map {
-                listOf(
-                    "(${it.x}|${it.y})",
-                    it.village,
-                    it.account,
-                    it.population.toString(),
-                    String.format(java.util.Locale.US, "%.2f", it.distance)
-                )
-            }
-            tableContainer.addView(
-                buildTable(
-                    listOf("Koordinat", "Village", "Account", "Pop", "Distance"),
-                    travcoRows,
-                    travco.map { it.x to it.y }
-                ) { x, y ->
-                    confirmDeleteRecord("TRAVCO", x, y) {
-                        db.deleteTravco(x, y)
+            container.addView(title("TRAVCO DB — ${trav.size} hasil"))
+            val travActions = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(button("HAPUS SEMUA TRAVCO") {
+                    confirmDeleteAllRecords("TRAVCO", db.travcoCount()) {
+                        db.deleteAllTravco()
                         travcoCount.text = "Travco DB: ${db.travcoCount()}"
-                        renderTables(q)
+                        render()
                     }
-                },
-                LinearLayout.LayoutParams(-1, dp(260)).apply { bottomMargin = dp(12) }
-            )
-
-            tableContainer.addView(TextView(this).apply {
-                text = "OASIS DB — ${oasis.size} hasil (urut Distance terendah)"
-                setTextColor(Color.WHITE)
-                textSize = 14f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setPadding(0, dp(8), 0, dp(6))
-            })
-
-            val oasisRows = oasis.map {
-                listOf(
-                    "(${it.x}|${it.y})",
-                    it.type,
-                    if (it.occupied) "OCCUPIED" else "FREE",
-                    it.animals,
-                    it.owner,
-                    it.alliance,
-                    String.format(java.util.Locale.US, "%.2f", it.distance)
-                )
+                }, LinearLayout.LayoutParams(-1, -2))
             }
-            tableContainer.addView(
-                buildTable(
-                    listOf("Koordinat", "Type", "Status", "Animals", "Owner", "Alliance", "Distance"),
-                    oasisRows,
-                    oasis.map { it.x to it.y }
-                ) { x, y ->
-                    confirmDeleteRecord("OASIS", x, y) {
-                        db.deleteOasis(x, y)
+            container.addView(travActions)
+            container.addView(travSearch)
+            container.addView(sectionScroll(buildTable(listOf("Koordinat","Village","Account","Pop","Distance"),trav.map{listOf("(${it.x}|${it.y})",it.village,it.account,it.population.toString(),String.format(java.util.Locale.US,"%.2f",it.distance))},trav.map{it.x to it.y}){x,y->confirmDeleteRecord("TRAVCO",x,y){db.deleteTravco(x,y);travcoCount.text="Travco DB: ${db.travcoCount()}";render()}},250))
+
+            container.addView(title("OASIS DB — ${oasis.size} hasil"))
+            val oasisActions = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(button("HAPUS SEMUA OASIS") {
+                    confirmDeleteAllRecords("OASIS", db.oasisCount()) {
+                        db.deleteAllOasis()
                         oasisCount.text = "Oasis DB: ${db.oasisCount()}"
-                        renderTables(q)
+                        render()
                     }
-                },
-                LinearLayout.LayoutParams(-1, dp(300))
-            )
-
-            resultInfo.text = "Pencarian: ${if (q.isBlank()) "semua data" else "\"$q\""}  •  TRAVCO ${travco.size}  •  OASIS ${oasis.size}"
-        }
-
-        val body = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(4), dp(12), dp(8))
-            setBackgroundColor(Color.rgb(38, 38, 38))
-        }
-
-        body.addView(searchInput, LinearLayout.LayoutParams(-1, dp(48)))
-        body.addView(resultInfo)
-
-        val scroll = ScrollView(this).apply {
-            addView(tableContainer)
-        }
-        body.addView(scroll, LinearLayout.LayoutParams(-1, dp(570)))
-
-        searchInput.setText(initialQuery)
-        renderTables(initialQuery)
-
-        searchInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                renderTables(s?.toString() ?: "")
+                }, LinearLayout.LayoutParams(-1, -2))
             }
-            override fun afterTextChanged(s: Editable?) {}
-        })
+            container.addView(oasisActions)
+            container.addView(oasisSearch)
+            container.addView(sectionScroll(buildTable(listOf("Koordinat","Type","Status","Animals","Owner","Alliance","Distance"),oasis.map{listOf("(${it.x}|${it.y})",it.type,if(it.occupied)"OCCUPIED" else "FREE",it.animals,it.owner,it.alliance,String.format(java.util.Locale.US,"%.2f",it.distance))},oasis.map{it.x to it.y}){x,y->confirmDeleteRecord("OASIS",x,y){db.deleteOasis(x,y);oasisCount.text="Oasis DB: ${db.oasisCount()}";render()}},300))
 
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("DATABASE OVERVIEW")
-            .setView(body)
-            .setPositiveButton("CLOSE", null)
-            .create()
-
-        dialog.setOnShowListener {
-            dialog.window?.setBackgroundDrawable(
-                android.graphics.drawable.ColorDrawable(Color.rgb(38, 38, 38))
-            )
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.WHITE)
+            container.addView(title("CROP DB — ${crop.size} hasil"))
+            val cropActions = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(button("HAPUS SEMUA CROP") {
+                    confirmDeleteAllRecords("CROP", db.cropCount()) {
+                        db.deleteAllCrop()
+                        cropCount.text = "Crop DB: ${db.cropCount()}"
+                        render()
+                    }
+                }, LinearLayout.LayoutParams(-1, -2))
+            }
+            container.addView(cropActions)
+            container.addView(cropSearch)
+            container.addView(sectionScroll(buildTable(listOf("Koordinat","Type","Village","Owner","Oasis Bonus","Distance"),crop.map{listOf("(${it.x}|${it.y})",it.type,it.village,it.owner,it.oasisBonus,String.format(java.util.Locale.US,"%.2f",it.distance))},crop.map{it.x to it.y}){x,y->confirmDeleteRecord("CROP",x,y){db.deleteCrop(x,y);cropCount.text="Crop DB: ${db.cropCount()}";render()}},300))
         }
-        dialog.show()
 
-        log("DB OVERVIEW: travco=${db.travcoCount()} oasis=${db.oasisCount()} freeOasis=${db.oasisUnoccupiedCount()} occupiedOasis=${db.oasisOccupiedCount()}")
+        // Keep one independent search field per database. Each database has its own vertical ScrollView.
+        body.addView(container,LinearLayout.LayoutParams(-1,dp(780)))
+        val dialog=AlertDialog.Builder(this).setTitle("DATABASE OVERVIEW").setView(body).setPositiveButton("CLOSE",null).create()
+        dialog.setOnShowListener{dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.rgb(38,38,38)));dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.WHITE)}
+        render()
+        val watcher=object:TextWatcher{
+            override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int){}
+            override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int){render()}
+            override fun afterTextChanged(s:Editable?){}
+        }
+        travSearch.addTextChangedListener(watcher); oasisSearch.addTextChangedListener(watcher); cropSearch.addTextChangedListener(watcher)
+        dialog.show()
+        log("DB OVERVIEW: travco=${db.travcoCount()} oasis=${db.oasisCount()} crop=${db.cropCount()} freeOasis=${db.oasisUnoccupiedCount()} occupiedOasis=${db.oasisOccupiedCount()}")
     }
 
     private fun confirmDeleteRecord(
@@ -812,6 +885,26 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("HAPUS") { _, _ ->
                 afterDelete()
                 log("$type DELETE: ($x|$y)")
+            }
+            .show()
+    }
+
+    private fun confirmDeleteAllRecords(
+        type: String,
+        count: Int,
+        afterDelete: () -> Unit
+    ) {
+        if (count <= 0) {
+            Toast.makeText(this, "DB $type sudah kosong", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Hapus semua record $type?")
+            .setMessage("Semua $count record dari database $type akan dihapus. Tindakan ini tidak dapat dibatalkan.")
+            .setNegativeButton("BATAL", null)
+            .setPositiveButton("HAPUS SEMUA") { _, _ ->
+                afterDelete()
+                log("$type DELETE ALL: $count record")
             }
             .show()
     }
@@ -1312,17 +1405,26 @@ class MainActivity : AppCompatActivity() {
     private fun lp(weight:Float)=LinearLayout.LayoutParams(0,-2,weight).apply{setMargins(4,4,4,4)}
     private fun dp(v:Int)= (v*resources.displayMetrics.density).toInt()
 
-    override fun onDestroy(){ webView.removeJavascriptInterface("AndroidBridge"); webView.destroy(); db.close(); super.onDestroy() }
+    override fun onDestroy(){ webView.removeJavascriptInterface("AndroidBridge"); webView.removeJavascriptInterface("CropBridge"); webView.destroy(); db.close(); super.onDestroy() }
 
-    private class ScannerDb(ctx:Context):android.database.sqlite.SQLiteOpenHelper(ctx,"scanner.db",null,1){
+    private class ScannerDb(ctx:Context):android.database.sqlite.SQLiteOpenHelper(ctx,"scanner.db",null,2){
         override fun onCreate(db:android.database.sqlite.SQLiteDatabase){
             db.execSQL("CREATE TABLE travco(id INTEGER PRIMARY KEY AUTOINCREMENT,x INTEGER,y INTEGER,account TEXT,village TEXT,distance REAL,population INTEGER,UNIQUE(x,y))")
             db.execSQL("CREATE TABLE oasis(id INTEGER PRIMARY KEY AUTOINCREMENT,x INTEGER,y INTEGER,occupied INTEGER,oasisType TEXT,filterType TEXT,animals TEXT,owner TEXT,alliance TEXT,UNIQUE(x,y))")
+            db.execSQL("CREATE TABLE crop(id INTEGER PRIMARY KEY AUTOINCREMENT,x INTEGER,y INTEGER,cropType TEXT,village TEXT,owner TEXT,oasisBonus TEXT,distance REAL,UNIQUE(x,y))")
         }
-        override fun onUpgrade(db:android.database.sqlite.SQLiteDatabase,oldVersion:Int,newVersion:Int){}
+        override fun onUpgrade(db:android.database.sqlite.SQLiteDatabase,oldVersion:Int,newVersion:Int){
+            if(oldVersion < 2) db.execSQL("CREATE TABLE IF NOT EXISTS crop(id INTEGER PRIMARY KEY AUTOINCREMENT,x INTEGER,y INTEGER,cropType TEXT,village TEXT,owner TEXT,oasisBonus TEXT,distance REAL,UNIQUE(x,y))")
+        }
         fun insertTravco(x:Int,y:Int,a:String,v:String,d:Double,p:Long){writableDatabase.execSQL("INSERT OR REPLACE INTO travco(x,y,account,village,distance,population) VALUES(?,?,?,?,?,?)",arrayOf(x,y,a,v,d,p))}
         fun deleteTravco(x:Int,y:Int){writableDatabase.delete("travco", "x=? AND y=?", arrayOf(x.toString(), y.toString()))}
         fun deleteOasis(x:Int,y:Int){writableDatabase.delete("oasis", "x=? AND y=?", arrayOf(x.toString(), y.toString()))}
+        fun deleteAllTravco(){writableDatabase.delete("travco", null, null)}
+        fun deleteAllOasis(){writableDatabase.delete("oasis", null, null)}
+        fun insertCrop(x:Int,y:Int,t:String,village:String,owner:String,bonus:String,d:Double){writableDatabase.execSQL("INSERT OR REPLACE INTO crop(x,y,cropType,village,owner,oasisBonus,distance) VALUES(?,?,?,?,?,?,?)",arrayOf(x,y,t,village,owner,bonus,d))}
+        fun deleteCrop(x:Int,y:Int){writableDatabase.delete("crop", "x=? AND y=?", arrayOf(x.toString(), y.toString()))}
+        fun deleteAllCrop(){writableDatabase.delete("crop", null, null)}
+        fun cropCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM crop",null).use{it.moveToFirst();it.getInt(0)}
         fun insertOasis(x:Int,y:Int,o:Boolean,t:String,f:String,a:String,owner:String,alliance:String){writableDatabase.execSQL("INSERT OR REPLACE INTO oasis(x,y,occupied,oasisType,filterType,animals,owner,alliance) VALUES(?,?,?,?,?,?,?,?)",arrayOf(x,y,if(o)1 else 0,t,f,a,owner,alliance))}
         fun travcoCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM travco",null).use{it.moveToFirst();it.getInt(0)}
         fun oasisCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis",null).use{it.moveToFirst();it.getInt(0)}
@@ -1335,6 +1437,10 @@ class MainActivity : AppCompatActivity() {
         data class OasisOverviewRow(
             val x:Int, val y:Int, val type:String, val animals:String,
             val occupied:Boolean, val owner:String, val alliance:String, val distance:Double
+        )
+        data class CropOverviewRow(
+            val x:Int, val y:Int, val type:String, val village:String, val owner:String,
+            val oasisBonus:String, val distance:Double
         )
 
         fun travcoOverviewRows(search:String = "", limit:Int = 1000):List<TravcoOverviewRow> {
@@ -1389,6 +1495,21 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             return rows.sortedBy { it.distance }.take(limit)
+        }
+
+        fun cropOverviewRows(search:String = "", limit:Int = 1000):List<CropOverviewRow> {
+            val q = "%${search.trim()}%"
+            return readableDatabase.rawQuery("""
+                SELECT x,y,cropType,village,owner,oasisBonus,distance
+                FROM crop
+                WHERE ? = '' OR CAST(x AS TEXT) LIKE ? OR CAST(y AS TEXT) LIKE ? OR
+                      cropType LIKE ? OR village LIKE ? OR owner LIKE ? OR oasisBonus LIKE ? OR
+                      CAST(distance AS TEXT) LIKE ?
+                ORDER BY distance ASC
+                LIMIT ?
+            """.trimIndent(), arrayOf(search.trim(),q,q,q,q,q,q,q,limit.toString())).use { c ->
+                buildList { while(c.moveToNext()) add(CropOverviewRow(c.getInt(0),c.getInt(1),c.getString(2) ?: "",c.getString(3) ?: "",c.getString(4) ?: "",c.getString(5) ?: "",c.getDouble(6))) }
+            }
         }
 
         fun travcoOverview(limit:Int):String = travcoOverviewRows("", limit).joinToString("\n") {
