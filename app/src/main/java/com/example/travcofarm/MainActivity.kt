@@ -124,17 +124,6 @@ class MainActivity : AppCompatActivity() {
         content.addView(button("MASUKKAN FARMLIST DARI TRAVCO") { addTravcoToFarmList() })
         content.addView(button("MASUKKAN FARMLIST DARI OASIS") { addOasisToFarmList() })
 
-        content.addView(label("LOG", 18f))
-        logView = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 12f
-            setPadding(8, 4, 8, 12)
-            typeface = android.graphics.Typeface.MONOSPACE
-            setTextIsSelectable(true)
-            isVerticalScrollBarEnabled = true
-        }
-        content.addView(logView)
-
         content.addView(label("WEBVIEW — DESKTOP MODE", 18f))
         webView = WebView(this).apply {
             layoutParams = LinearLayout.LayoutParams(-1, dp(520))
@@ -154,6 +143,18 @@ class MainActivity : AppCompatActivity() {
         }
         configureWebView()
         content.addView(webView)
+
+        // LOG selalu berada paling bawah agar tidak mengganggu area kontrol/WebView.
+        content.addView(label("LOG", 18f))
+        logView = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setPadding(8, 4, 8, 12)
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            isVerticalScrollBarEnabled = true
+        }
+        content.addView(logView)
 
         setContentView(root)
         log("APP START")
@@ -584,7 +585,7 @@ class MainActivity : AppCompatActivity() {
         logView.text = ""
     }
 
-    private fun showDbOverview() {
+    private fun showDbOverview(initialQuery: String = "") {
         val searchInput = EditText(this).apply {
             hint = "Cari koordinat, nama, akun, tipe, owner, alliance..."
             setTextColor(Color.WHITE)
@@ -619,7 +620,9 @@ class MainActivity : AppCompatActivity() {
 
         fun buildTable(
             headers: List<String>,
-            rows: List<List<String>>
+            rows: List<List<String>>,
+            deleteKeys: List<Pair<Int, Int>>? = null,
+            onDelete: ((Int, Int) -> Unit)? = null
         ): HorizontalScrollView {
             val table = TableLayout(this).apply {
                 isStretchAllColumns = false
@@ -635,6 +638,11 @@ class MainActivity : AppCompatActivity() {
                     setMargins(dp(1), dp(1), dp(1), dp(1))
                 })
             }
+            if (deleteKeys != null && onDelete != null) {
+                headerRow.addView(cell("Action", true), TableRow.LayoutParams().apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                })
+            }
             table.addView(headerRow)
 
             rows.forEachIndexed { index, row ->
@@ -643,6 +651,22 @@ class MainActivity : AppCompatActivity() {
                 }
                 row.forEach { value ->
                     tr.addView(cell(value), TableRow.LayoutParams().apply {
+                        setMargins(dp(1), dp(1), dp(1), dp(1))
+                    })
+                }
+
+                if (deleteKeys != null && onDelete != null) {
+                    val key = deleteKeys.getOrNull(index)
+                    val deleteButton = Button(this).apply {
+                        text = "HAPUS"
+                        isAllCaps = false
+                        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
+                        setPadding(dp(8), dp(2), dp(8), dp(2))
+                        setOnClickListener {
+                            if (key != null) onDelete.invoke(key.first, key.second)
+                        }
+                    }
+                    tr.addView(deleteButton, TableRow.LayoutParams().apply {
                         setMargins(dp(1), dp(1), dp(1), dp(1))
                     })
                 }
@@ -684,8 +708,15 @@ class MainActivity : AppCompatActivity() {
             tableContainer.addView(
                 buildTable(
                     listOf("Koordinat", "Village", "Account", "Pop", "Distance"),
-                    travcoRows
-                ),
+                    travcoRows,
+                    travco.map { it.x to it.y }
+                ) { x, y ->
+                    confirmDeleteRecord("TRAVCO", x, y) {
+                        db.deleteTravco(x, y)
+                        travcoCount.text = "Travco DB: ${db.travcoCount()}"
+                        renderTables(q)
+                    }
+                },
                 LinearLayout.LayoutParams(-1, dp(260)).apply { bottomMargin = dp(12) }
             )
 
@@ -711,8 +742,15 @@ class MainActivity : AppCompatActivity() {
             tableContainer.addView(
                 buildTable(
                     listOf("Koordinat", "Type", "Status", "Animals", "Owner", "Alliance", "Distance"),
-                    oasisRows
-                ),
+                    oasisRows,
+                    oasis.map { it.x to it.y }
+                ) { x, y ->
+                    confirmDeleteRecord("OASIS", x, y) {
+                        db.deleteOasis(x, y)
+                        oasisCount.text = "Oasis DB: ${db.oasisCount()}"
+                        renderTables(q)
+                    }
+                },
                 LinearLayout.LayoutParams(-1, dp(300))
             )
 
@@ -733,7 +771,8 @@ class MainActivity : AppCompatActivity() {
         }
         body.addView(scroll, LinearLayout.LayoutParams(-1, dp(570)))
 
-        renderTables("")
+        searchInput.setText(initialQuery)
+        renderTables(initialQuery)
 
         searchInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -758,6 +797,23 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
 
         log("DB OVERVIEW: travco=${db.travcoCount()} oasis=${db.oasisCount()} freeOasis=${db.oasisUnoccupiedCount()} occupiedOasis=${db.oasisOccupiedCount()}")
+    }
+
+    private fun confirmDeleteRecord(
+        type: String,
+        x: Int,
+        y: Int,
+        afterDelete: () -> Unit
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle("Hapus record $type?")
+            .setMessage("Record ($x|$y) akan dihapus dari database $type.")
+            .setNegativeButton("BATAL", null)
+            .setPositiveButton("HAPUS") { _, _ ->
+                afterDelete()
+                log("$type DELETE: ($x|$y)")
+            }
+            .show()
     }
 
     private fun selectedFarmListNames(): List<String> {
@@ -1249,7 +1305,6 @@ class MainActivity : AppCompatActivity() {
     private fun log(message:String) {
         val line="${java.text.SimpleDateFormat("HH:mm:ss.SSS").format(java.util.Date())} | $message\n"
         logView.append(line)
-        logView.post { logView.layout?.let { if (it.lineCount > 0) logView.scrollTo(0, it.getLineTop(it.lineCount - 1)) } }
     }
     private fun edit(hint:String,value:String)=EditText(this).apply{setHint(hint);setText(value);setTextColor(Color.WHITE);setHintTextColor(Color.LTGRAY);textSize=18f}
     private fun label(text:String,size:Float=16f)=TextView(this).apply{this.text=text;setTextColor(Color.LTGRAY);textSize=size;setPadding(0,10,0,8)}
@@ -1267,6 +1322,7 @@ class MainActivity : AppCompatActivity() {
         override fun onUpgrade(db:android.database.sqlite.SQLiteDatabase,oldVersion:Int,newVersion:Int){}
         fun insertTravco(x:Int,y:Int,a:String,v:String,d:Double,p:Long){writableDatabase.execSQL("INSERT OR REPLACE INTO travco(x,y,account,village,distance,population) VALUES(?,?,?,?,?,?)",arrayOf(x,y,a,v,d,p))}
         fun deleteTravco(x:Int,y:Int){writableDatabase.delete("travco", "x=? AND y=?", arrayOf(x.toString(), y.toString()))}
+        fun deleteOasis(x:Int,y:Int){writableDatabase.delete("oasis", "x=? AND y=?", arrayOf(x.toString(), y.toString()))}
         fun insertOasis(x:Int,y:Int,o:Boolean,t:String,f:String,a:String,owner:String,alliance:String){writableDatabase.execSQL("INSERT OR REPLACE INTO oasis(x,y,occupied,oasisType,filterType,animals,owner,alliance) VALUES(?,?,?,?,?,?,?,?)",arrayOf(x,y,if(o)1 else 0,t,f,a,owner,alliance))}
         fun travcoCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM travco",null).use{it.moveToFirst();it.getInt(0)}
         fun oasisCount()=readableDatabase.rawQuery("SELECT COUNT(*) FROM oasis",null).use{it.moveToFirst();it.getInt(0)}
