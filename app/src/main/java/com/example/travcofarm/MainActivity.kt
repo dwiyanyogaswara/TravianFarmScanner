@@ -865,7 +865,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Keep one independent search field per database. Each database has its own vertical ScrollView.
-        body.addView(container,LinearLayout.LayoutParams(-1,dp(780)))
+        body.addView(container,LinearLayout.LayoutParams(-1,-2))
         val outerScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = true
             addView(body)
