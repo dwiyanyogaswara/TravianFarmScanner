@@ -866,7 +866,11 @@ class MainActivity : AppCompatActivity() {
 
         // Keep one independent search field per database. Each database has its own vertical ScrollView.
         body.addView(container,LinearLayout.LayoutParams(-1,dp(780)))
-        val dialog=AlertDialog.Builder(this).setTitle("DATABASE OVERVIEW").setView(body).setPositiveButton("CLOSE",null).create()
+        val outerScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = true
+            addView(body)
+        }
+        val dialog=AlertDialog.Builder(this).setTitle("DATABASE OVERVIEW").setView(outerScroll).setPositiveButton("CLOSE",null).create()
         dialog.setOnShowListener{dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.rgb(38,38,38)));dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.WHITE)}
         render()
         val watcher=object:TextWatcher{
