@@ -23,6 +23,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import android.widget.CheckBox
 import android.widget.HorizontalScrollView
 import android.widget.TableLayout
@@ -731,6 +732,12 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             log("CROP JSON ERROR center=($requestX|$requestY): ${e.message}; JSON=${json.take(1800)}")
         }
+    }
+
+    private fun distance(x1: Int, y1: Int, x2: Int, y2: Int): Double {
+        val dx = (x2 - x1).toDouble()
+        val dy = (y2 - y1).toDouble()
+        return sqrt(dx * dx + dy * dy)
     }
 
     private fun copyLog() {
