@@ -779,10 +779,12 @@ class MainActivity : AppCompatActivity() {
             val type = crop + "c"
             val centerX = xInput.text.toString().toIntOrNull() ?: 0
             val centerY = yInput.text.toString().toIntOrNull() ?: 0
-            val owner = (Regex("\\{k\\.spieler\\}\\s*([^<]+)<", RegexOption.IGNORE_CASE).find(normalized)?.groupValues?.getOrNull(1)?.trim()
-                ?: Regex("\\{k\\.spieler\\}\\s*([^<]+)<", RegexOption.IGNORE_CASE).find(mapText)?.groupValues?.getOrNull(1)?.trim() ?: ""
-            val village = (Regex("\\{k\\.dorf\\}\\s*([^<]+)<", RegexOption.IGNORE_CASE).find(normalized)?.groupValues?.getOrNull(1)?.trim()
-                ?: Regex("\\{k\\.dorf\\}\\s*([^<]+)<", RegexOption.IGNORE_CASE).find(mapText)?.groupValues?.getOrNull(1)?.trim() ?: ""
+            val ownerRegex = Regex("\\{k\\.spieler\\}\\s*([^<]+)<", RegexOption.IGNORE_CASE)
+            val villageRegex = Regex("\\{k\\.dorf\\}\\s*([^<]+)<", RegexOption.IGNORE_CASE)
+            val ownerMatch = ownerRegex.find(normalized) ?: ownerRegex.find(mapText)
+            val villageMatch = villageRegex.find(normalized) ?: villageRegex.find(mapText)
+            val owner = ownerMatch?.groupValues?.getOrNull(1)?.trim() ?: ""
+            val village = villageMatch?.groupValues?.getOrNull(1)?.trim() ?: ""
             val bonus = o.optString("bonus", "0%")
             db.insertCrop(x, y, type, village, owner, bonus, distance(centerX, centerY, x, y), true)
             log("CROP OCCUPIED SAVE: $type ($x|$y) owner='$owner' village='$village'")
