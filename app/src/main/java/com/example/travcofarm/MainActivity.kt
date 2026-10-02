@@ -772,7 +772,7 @@ class MainActivity : AppCompatActivity() {
             if (html.isBlank()) return
             val normalized = html.replace("\n", " ").replace("\t", " ")
             val mapText = o.optString("mapText")
-            val crop = Regex("title=\"Crop\"[^>]*>.*?</i></td>\\s*<td[^>]*class=\"val\"[^>]*>\\s*(9|15)\\s*</td>", RegexOption.IGNORE_CASE or RegexOption.DOT_MATCHES_ALL)
+            val crop = Regex("title=\"Crop\"[^>]*>.*?</i></td>\\s*<td[^>]*class=\"val\"[^>]*>\\s*(9|15)\\s*</td>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                 .find(normalized)?.groupValues?.getOrNull(1)
                 ?: Regex("Crop[^<]{0,120}>(?:\\s*)?(9|15)(?:\\s*)<", RegexOption.IGNORE_CASE).find(normalized)?.groupValues?.getOrNull(1)
             if (crop == null) return
@@ -1395,6 +1395,14 @@ class MainActivity : AppCompatActivity() {
     }
     private fun edit(hint:String,value:String)=EditText(this).apply{setHint(hint);setText(value);setTextColor(Color.WHITE);setHintTextColor(Color.LTGRAY);textSize=18f}
     private fun label(text:String,size:Float=16f)=TextView(this).apply{this.text=text;setTextColor(Color.LTGRAY);textSize=size;setPadding(0,10,0,8)}
+    private fun title(text: String) = TextView(this).apply {
+        this.text = text
+        setTextColor(Color.WHITE)
+        textSize = 16f
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        setPadding(dp(8), dp(8), dp(8), dp(8))
+    }
+
     private fun button(text:String,onClick:()->Unit)=Button(this).apply{this.text=text;setOnClickListener{onClick()};isAllCaps=false}
     private fun lp(weight:Float)=LinearLayout.LayoutParams(0,-2,weight).apply{setMargins(4,4,4,4)}
     private fun dp(v:Int)= (v*resources.displayMetrics.density).toInt()
